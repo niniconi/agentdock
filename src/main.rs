@@ -40,7 +40,13 @@ fn main() -> Result<()> {
     if !DockerClient::exists(&target_name) {
         println!("Starting new container: {}", target_name);
 
-        DockerClient::run(&target_name, &agent_config, &mount_path, cli.rm)?;
+        DockerClient::run(
+            &target_name,
+            &agent_config,
+            &mount_path,
+            cli.rm,
+            cli.herdr_sock,
+        )?;
 
         // Persistent storage
         if !cli.rm {

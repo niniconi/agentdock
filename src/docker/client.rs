@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::types::{AgentConfig, ContainerStatus};
@@ -7,7 +7,21 @@ use super::types::{AgentConfig, ContainerStatus};
 pub struct DockerClient;
 
 impl DockerClient {
-    pub fn run(name: &str, config: &AgentConfig, mount_path: &Path, rm: bool) -> Result<()> {
+    fn herdr_socket_path() -> PathBuf {
+        if let Ok(path) = std::env::var("HERDR_SOCKET_PATH") {
+            return PathBuf::from(path);
+        }
+        let home = dirs::home_dir().expect("Failed to determine home directory");
+        home.join(".config").join("herdr").join("herdr.sock")
+    }
+
+    pub fn run(
+        name: &str,
+        config: &AgentConfig,
+        mount_path: &Path,
+        rm: bool,
+        herdr_sock: bool,
+    ) -> Result<()> {
         let mut args = vec![
             "run".to_string(),
             "-d".to_string(),
@@ -23,6 +37,17 @@ impl DockerClient {
         let mount = format!("{}:/workspace", mount_path.display());
         args.push("-v".to_string());
         args.push(mount);
+
+        // Mount Herdr Unix socket
+        if herdr_sock {
+            let sock_path = Self::herdr_socket_path();
+            let host_sock = sock_path.display().to_string();
+            let container_sock = "/tmp/herdr.sock";
+            args.push("-v".to_string());
+            args.push(format!("{}:{}", host_sock, container_sock));
+            args.push("-e".to_string());
+            args.push(format!("HERDR_SOCKET_PATH={}", container_sock));
+        }
 
         // Image name
         args.push(config.docker_image.clone());
