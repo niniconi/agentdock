@@ -21,6 +21,7 @@ impl DockerClient {
         mount_path: &Path,
         rm: bool,
         herdr_sock: bool,
+        kvm: bool,
     ) -> Result<()> {
         let mut args = vec![
             "run".to_string(),
@@ -47,6 +48,12 @@ impl DockerClient {
             args.push(format!("{}:{}", host_sock, container_sock));
             args.push("-e".to_string());
             args.push(format!("HERDR_SOCKET_PATH={}", container_sock));
+        }
+
+        // Mount host /dev/kvm for KVM virtualization
+        if kvm {
+            args.push("--device".to_string());
+            args.push("/dev/kvm".to_string());
         }
 
         // Image name

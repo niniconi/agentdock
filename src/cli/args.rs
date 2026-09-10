@@ -27,6 +27,10 @@ pub struct Cli {
     /// Record identifier name
     #[arg(short, long)]
     pub name: Option<String>,
+
+    /// Map host /dev/kvm into container (for KVM virtualization)
+    #[arg(long)]
+    pub kvm: bool,
 }
 
 impl Cli {

@@ -46,6 +46,7 @@ fn main() -> Result<()> {
             &mount_path,
             cli.rm,
             cli.herdr_sock,
+            cli.kvm,
         )?;
 
         // Persistent storage
