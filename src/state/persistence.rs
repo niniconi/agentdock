@@ -9,6 +9,12 @@ use std::path::{Path, PathBuf};
 pub struct Record {
     pub path: PathBuf,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub init_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub http_proxy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub https_proxy: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

@@ -31,6 +31,14 @@ pub struct Cli {
     /// Map host /dev/kvm into container (for KVM virtualization)
     #[arg(long)]
     pub kvm: bool,
+
+    /// HTTP proxy address (e.g. http://127.0.0.1:7890)
+    #[arg(long)]
+    pub http_proxy: Option<String>,
+
+    /// HTTPS proxy address (e.g. http://127.0.0.1:7890)
+    #[arg(long)]
+    pub https_proxy: Option<String>,
 }
 
 impl Cli {

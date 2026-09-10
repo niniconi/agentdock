@@ -51,6 +51,15 @@ impl AgentConfig {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RunOptions {
+    pub rm: bool,
+    pub herdr_sock: bool,
+    pub kvm: bool,
+    pub http_proxy: Option<String>,
+    pub https_proxy: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

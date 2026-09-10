@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::types::{AgentConfig, ContainerStatus};
+use super::types::{AgentConfig, ContainerStatus, RunOptions};
 
 pub struct DockerClient;
 
@@ -19,9 +19,7 @@ impl DockerClient {
         name: &str,
         config: &AgentConfig,
         mount_path: &Path,
-        rm: bool,
-        herdr_sock: bool,
-        kvm: bool,
+        opts: &RunOptions,
     ) -> Result<()> {
         let mut args = vec![
             "run".to_string(),
@@ -30,7 +28,7 @@ impl DockerClient {
             name.to_string(),
         ];
 
-        if rm {
+        if opts.rm {
             args.push("--rm".to_string());
         }
 
@@ -40,7 +38,7 @@ impl DockerClient {
         args.push(mount);
 
         // Mount Herdr Unix socket
-        if herdr_sock {
+        if opts.herdr_sock {
             let sock_path = Self::herdr_socket_path();
             let host_sock = sock_path.display().to_string();
             let container_sock = "/tmp/herdr.sock";
@@ -51,9 +49,23 @@ impl DockerClient {
         }
 
         // Mount host /dev/kvm for KVM virtualization
-        if kvm {
+        if opts.kvm {
             args.push("--device".to_string());
             args.push("/dev/kvm".to_string());
+        }
+
+        // Set proxy environment variables
+        if let Some(ref proxy) = opts.http_proxy {
+            args.push("-e".to_string());
+            args.push(format!("HTTP_PROXY={}", proxy));
+            args.push("-e".to_string());
+            args.push(format!("http_proxy={}", proxy));
+        }
+        if let Some(ref proxy) = opts.https_proxy {
+            args.push("-e".to_string());
+            args.push(format!("HTTPS_PROXY={}", proxy));
+            args.push("-e".to_string());
+            args.push(format!("https_proxy={}", proxy));
         }
 
         // Image name
@@ -90,14 +102,6 @@ impl DockerClient {
             "false" => Ok(ContainerStatus::Stopped),
             _ => Ok(ContainerStatus::NotFound),
         }
-    }
-
-    pub fn exists(name: &str) -> bool {
-        Command::new("docker")
-            .args(["inspect", name])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
     }
 
     pub fn restart(name: &str) -> Result<()> {
@@ -150,6 +154,17 @@ impl DockerClient {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             bail!("Failed to stop container: {}", stderr);
+        }
+
+        Ok(())
+    }
+
+    pub fn destroy(name: &str) -> Result<()> {
+        let output = Command::new("docker").args(["rm", "-f", name]).output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to remove container: {}", stderr);
         }
 
         Ok(())
