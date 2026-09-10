@@ -1,9 +1,21 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "agentdock", about = "Docker-based AI Agent Manager", version)]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Start or manage an AI agent container
+    Run(RunArgs),
+}
+
+#[derive(Parser)]
+pub struct RunArgs {
     /// Agent config format: {docker_image}/{agent_name} (e.g., nixos/opencode)
     #[arg(short, long, default_value = "nixos/pi-agent")]
     pub agent: String,
@@ -41,7 +53,7 @@ pub struct Cli {
     pub https_proxy: Option<String>,
 }
 
-impl Cli {
+impl RunArgs {
     pub fn get_mount_path(&self) -> PathBuf {
         self.path
             .clone()

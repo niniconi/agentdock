@@ -1,4 +1,4 @@
-use crate::cli::Cli;
+use crate::cli::RunArgs;
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
@@ -41,14 +41,14 @@ pub struct RunOptions {
     pub https_proxy: Option<String>,
 }
 
-impl From<&Cli> for RunOptions {
-    fn from(cli: &Cli) -> Self {
+impl From<&RunArgs> for RunOptions {
+    fn from(args: &RunArgs) -> Self {
         Self {
-            rm: cli.rm,
-            herdr_sock: cli.herdr_sock,
-            kvm: cli.kvm,
-            http_proxy: cli.http_proxy.clone(),
-            https_proxy: cli.https_proxy.clone(),
+            rm: args.rm,
+            herdr_sock: args.herdr_sock,
+            kvm: args.kvm,
+            http_proxy: args.http_proxy.clone(),
+            https_proxy: args.https_proxy.clone(),
         }
     }
 }
