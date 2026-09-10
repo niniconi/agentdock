@@ -2,7 +2,8 @@ use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::types::{AgentConfig, ContainerStatus, RunOptions};
+use super::types::ContainerStatus;
+use crate::config::{AgentConfig, RunOptions};
 
 pub struct DockerClient;
 

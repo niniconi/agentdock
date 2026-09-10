@@ -2,4 +2,4 @@ pub mod client;
 pub mod types;
 
 pub use client::DockerClient;
-pub use types::{AgentConfig, ContainerStatus, RunOptions};
+pub use types::ContainerStatus;
