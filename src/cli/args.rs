@@ -28,10 +28,6 @@ pub struct RunArgs {
     #[arg(short, long)]
     pub path: Option<PathBuf>,
 
-    /// Mount Herdr Unix Socket
-    #[arg(long)]
-    pub herdr_sock: bool,
-
     /// Custom initialization script
     #[arg(short, long)]
     pub init: Option<String>,

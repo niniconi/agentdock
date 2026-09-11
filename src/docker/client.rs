@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use super::types::ContainerStatus;
@@ -8,14 +8,6 @@ use crate::config::{AgentConfig, RunOptions};
 pub struct DockerClient;
 
 impl DockerClient {
-    fn herdr_socket_path() -> PathBuf {
-        if let Ok(path) = std::env::var("HERDR_SOCKET_PATH") {
-            return PathBuf::from(path);
-        }
-        let home = dirs::home_dir().expect("Failed to determine home directory");
-        home.join(".config").join("herdr").join("herdr.sock")
-    }
-
     pub fn run(
         name: &str,
         config: &AgentConfig,
@@ -37,17 +29,6 @@ impl DockerClient {
         let mount = format!("{}:/workspace", mount_path.display());
         args.push("-v".to_string());
         args.push(mount);
-
-        // Mount Herdr Unix socket
-        if opts.herdr_sock {
-            let sock_path = Self::herdr_socket_path();
-            let host_sock = sock_path.display().to_string();
-            let container_sock = "/tmp/herdr.sock";
-            args.push("-v".to_string());
-            args.push(format!("{}:{}", host_sock, container_sock));
-            args.push("-e".to_string());
-            args.push(format!("HERDR_SOCKET_PATH={}", container_sock));
-        }
 
         // Mount host /dev/kvm for KVM virtualization
         if opts.kvm {

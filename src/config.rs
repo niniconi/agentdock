@@ -35,7 +35,6 @@ impl AgentConfig {
 #[derive(Debug, Clone)]
 pub struct RunOptions {
     pub rm: bool,
-    pub herdr_sock: bool,
     pub kvm: bool,
     pub http_proxy: Option<String>,
     pub https_proxy: Option<String>,
@@ -45,7 +44,6 @@ impl From<&RunArgs> for RunOptions {
     fn from(args: &RunArgs) -> Self {
         Self {
             rm: args.rm,
-            herdr_sock: args.herdr_sock,
             kvm: args.kvm,
             http_proxy: args.http_proxy.clone(),
             https_proxy: args.https_proxy.clone(),
