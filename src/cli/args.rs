@@ -12,6 +12,12 @@ pub struct Cli {
 pub enum Commands {
     /// Start or manage an AI agent container
     Run(RunArgs),
+    /// List all managed containers
+    List(ListArgs),
+    /// Delete a container and its record
+    Delete(DeleteArgs),
+    /// Show container status
+    Status(StatusArgs),
 }
 
 #[derive(Parser)]
@@ -55,4 +61,35 @@ impl RunArgs {
             .clone()
             .unwrap_or_else(|| std::env::current_dir().expect("Failed to get current directory"))
     }
+}
+
+#[derive(Parser)]
+pub struct ListArgs {
+    /// Show all containers including stopped
+    #[arg(long)]
+    pub all: bool,
+
+    /// Show detailed information
+    #[arg(short, long)]
+    pub verbose: bool,
+
+    /// Output format (table, json)
+    #[arg(short, long, default_value = "table")]
+    pub format: String,
+}
+
+#[derive(Parser)]
+pub struct DeleteArgs {
+    /// Container name to delete
+    pub name: String,
+
+    /// Also remove the Docker container (not just the record)
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Parser)]
+pub struct StatusArgs {
+    /// Container name
+    pub name: String,
 }

@@ -77,6 +77,10 @@ impl StateManager {
         self.records.insert(name, record);
     }
 
+    pub fn get_all(&self) -> &std::collections::HashMap<String, Record> {
+        &self.records
+    }
+
     #[allow(dead_code)]
     pub fn remove(&mut self, name: &str) {
         self.records.remove(name);

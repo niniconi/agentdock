@@ -3,6 +3,7 @@ use clap::Parser;
 use uuid::Uuid;
 
 mod cli;
+mod commands;
 mod config;
 mod container;
 mod docker;
@@ -19,6 +20,9 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Run(args) => run(args),
+        Commands::List(args) => commands::execute_list(args),
+        Commands::Delete(args) => commands::execute_delete(args),
+        Commands::Status(args) => commands::execute_status(args),
     }
 }
 
