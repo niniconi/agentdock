@@ -1,5 +1,24 @@
 use crate::cli::RunArgs;
 
+/// Validate port mapping format (HOST:CONTAINER)
+pub fn validate_port_mapping(port: &str) -> Result<(), String> {
+    let parts: Vec<&str> = port.split(':').collect();
+    if parts.len() != 2 {
+        return Err(format!(
+            "Invalid port mapping format '{}'. Expected HOST:CONTAINER",
+            port
+        ));
+    }
+    for part in &parts {
+        if part.is_empty() {
+            return Err(format!("Port number cannot be empty in '{}'", port));
+        }
+        part.parse::<u16>()
+            .map_err(|_| format!("Invalid port number '{}' in port mapping '{}'", part, port))?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     pub docker_image: String,
@@ -38,6 +57,7 @@ pub struct RunOptions {
     pub kvm: bool,
     pub http_proxy: Option<String>,
     pub https_proxy: Option<String>,
+    pub ports: Vec<String>,
 }
 
 impl From<&RunArgs> for RunOptions {
@@ -47,6 +67,7 @@ impl From<&RunArgs> for RunOptions {
             kvm: args.kvm,
             http_proxy: args.http_proxy.clone(),
             https_proxy: args.https_proxy.clone(),
+            ports: args.port.clone(),
         }
     }
 }

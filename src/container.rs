@@ -14,6 +14,7 @@ pub fn handle_existing(
     mount_path: &Path,
     opts: &RunOptions,
     cli_init_content: &Option<String>,
+    state: &mut StateManager,
 ) -> Result<String> {
     let name = name.to_string();
 
@@ -28,15 +29,30 @@ pub fn handle_existing(
         ContainerStatus::Running => {
             let proxy_changed =
                 record.http_proxy != opts.http_proxy || record.https_proxy != opts.https_proxy;
-            if proxy_changed {
+            let ports_changed = record
+                .ports
+                .as_ref()
+                .map_or(!opts.ports.is_empty(), |p| p != &opts.ports);
+            if proxy_changed || ports_changed {
                 println!(
-                    "Proxy settings changed, recreating running container: {}",
+                    "Proxy/port settings changed, recreating running container: {}",
                     name
                 );
                 DockerClient::stop(&name)?;
                 DockerClient::destroy(&name)?;
                 DockerClient::run(&name, agent_config, mount_path, opts)?;
                 run_init_script(&name, init_content)?;
+
+                let mut updated = record.clone();
+                updated.http_proxy = opts.http_proxy.clone();
+                updated.https_proxy = opts.https_proxy.clone();
+                updated.ports = if opts.ports.is_empty() {
+                    None
+                } else {
+                    Some(opts.ports.clone())
+                };
+                state.insert(name.clone(), updated);
+                state.save()?;
             }
             DockerClient::exec(&name, &agent_config.agent_name)?;
             Ok(name)
@@ -44,14 +60,29 @@ pub fn handle_existing(
         ContainerStatus::Stopped => {
             let proxy_changed =
                 record.http_proxy != opts.http_proxy || record.https_proxy != opts.https_proxy;
-            if proxy_changed {
+            let ports_changed = record
+                .ports
+                .as_ref()
+                .map_or(!opts.ports.is_empty(), |p| p != &opts.ports);
+            if proxy_changed || ports_changed {
                 println!(
-                    "Proxy settings changed, recreating stopped container: {}",
+                    "Proxy/port settings changed, recreating stopped container: {}",
                     name
                 );
                 DockerClient::destroy(&name)?;
                 DockerClient::run(&name, agent_config, mount_path, opts)?;
                 run_init_script(&name, init_content)?;
+
+                let mut updated = record.clone();
+                updated.http_proxy = opts.http_proxy.clone();
+                updated.https_proxy = opts.https_proxy.clone();
+                updated.ports = if opts.ports.is_empty() {
+                    None
+                } else {
+                    Some(opts.ports.clone())
+                };
+                state.insert(name.clone(), updated);
+                state.save()?;
             } else {
                 println!("Restarting stopped container: {}", name);
                 DockerClient::restart(&name)?;
@@ -85,6 +116,11 @@ pub fn start_new(
             init_content: cli_init_content.clone(),
             http_proxy: opts.http_proxy.clone(),
             https_proxy: opts.https_proxy.clone(),
+            ports: if opts.ports.is_empty() {
+                None
+            } else {
+                Some(opts.ports.clone())
+            },
         };
         state.insert(name.to_string(), record);
         state.save()?;

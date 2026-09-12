@@ -15,6 +15,8 @@ pub struct Record {
     pub http_proxy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub https_proxy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ports: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

@@ -12,7 +12,7 @@ mod init;
 mod state;
 
 use cli::{Commands, RunArgs};
-use config::RunOptions;
+use config::{validate_port_mapping, RunOptions};
 use init::read_init_content;
 
 fn main() -> Result<()> {
@@ -32,6 +32,11 @@ fn run(args: RunArgs) -> Result<()> {
     let mut state = state::StateManager::new();
     let opts = RunOptions::from(&args);
 
+    // Validate port mappings
+    for port in &opts.ports {
+        validate_port_mapping(port).map_err(|e| anyhow::anyhow!(e))?;
+    }
+
     // Read init script content if provided via CLI
     let cli_init_content = match args.init {
         Some(ref path) => Some(read_init_content(path, &mount_path)?),
@@ -41,13 +46,15 @@ fn run(args: RunArgs) -> Result<()> {
     // Deduplication and mode recognition
     let target_name = if let Some(ref name) = args.name {
         if let Some(record) = state.find_by_name(name) {
+            let record = record.clone();
             container::handle_existing(
                 name,
-                record,
+                &record,
                 &agent_config,
                 &mount_path,
                 &opts,
                 &cli_init_content,
+                &mut state,
             )?
         } else {
             name.clone()
@@ -55,13 +62,15 @@ fn run(args: RunArgs) -> Result<()> {
     } else {
         if let Some((name, record)) = state.find_by_path(&mount_path) {
             let name = name.to_string();
+            let record = record.clone();
             container::handle_existing(
                 &name,
-                record,
+                &record,
                 &agent_config,
                 &mount_path,
                 &opts,
                 &cli_init_content,
+                &mut state,
             )?
         } else {
             Uuid::new_v4().to_string()

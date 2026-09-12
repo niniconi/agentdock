@@ -50,6 +50,12 @@ impl DockerClient {
             args.push(format!("https_proxy={}", proxy));
         }
 
+        // Port mappings
+        for port in &opts.ports {
+            args.push("-p".to_string());
+            args.push(port.clone());
+        }
+
         // Image name
         args.push(config.docker_image.clone());
 

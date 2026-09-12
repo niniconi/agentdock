@@ -53,6 +53,10 @@ pub struct RunArgs {
     /// HTTPS proxy address (e.g. http://127.0.0.1:7890)
     #[arg(long)]
     pub https_proxy: Option<String>,
+
+    /// Port mapping (e.g., 8080:80, 3000:3000). Can be specified multiple times.
+    #[arg(short = 'P', long = "port", value_name = "HOST:CONTAINER")]
+    pub port: Vec<String>,
 }
 
 impl RunArgs {
