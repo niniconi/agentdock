@@ -1,6 +1,6 @@
 pub fn container_not_found_error(name: &str) -> String {
     format!(
-        r#"Error: Associated container '{}' does not exist
+        r#"Associated container '{}' does not exist
 
 Possible causes:
   1. Container was manually deleted: docker rm {}
