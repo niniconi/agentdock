@@ -75,6 +75,29 @@ impl StateManager {
         None
     }
 
+    /// All records whose mount path lies inside `root`.
+    ///
+    /// Used before relocating a repository, so containers mounted anywhere below
+    /// the project root are detected rather than just the root itself.
+    pub fn find_within(&self, root: &Path) -> Vec<(String, PathBuf)> {
+        let canonical = match root.canonicalize() {
+            Ok(p) => p,
+            Err(_) => return Vec::new(),
+        };
+
+        self.records
+            .iter()
+            .filter_map(|(name, record)| {
+                let record_canonical = record.path.canonicalize().ok()?;
+                if record_canonical.starts_with(&canonical) {
+                    Some((name.clone(), record_canonical))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub fn insert(&mut self, name: String, record: Record) {
         self.records.insert(name, record);
     }

@@ -18,8 +18,15 @@ pub enum Commands {
     Delete(DeleteArgs),
     /// Show container status
     Status(StatusArgs),
+    /// Convert a project into git worktree form for multi-agent collaboration
+    #[command(subcommand)]
+    Worktree(WorktreeArgs),
 }
 
+/// Options shared by `run` and `worktree add --run`.
+///
+/// Lives in its own struct so the worktree subcommand can reuse the exact same
+/// flags instead of duplicating them.
 #[derive(Args, Clone)]
 pub struct RunOpts {
     /// Agent config format: {docker_image}/{agent_name} (e.g., nixos/opencode)
@@ -53,9 +60,6 @@ pub struct RunOpts {
 
 #[derive(Parser)]
 pub struct RunArgs {
-    #[command(flatten)]
-    pub opts: RunOpts,
-
     /// Host mount directory (default: current directory)
     #[arg(short, long)]
     pub path: Option<PathBuf>,
@@ -63,6 +67,9 @@ pub struct RunArgs {
     /// Record identifier name
     #[arg(short, long)]
     pub name: Option<String>,
+
+    #[command(flatten)]
+    pub opts: RunOpts,
 }
 
 impl RunArgs {
@@ -102,4 +109,54 @@ pub struct DeleteArgs {
 pub struct StatusArgs {
     /// Container name
     pub name: String,
+}
+
+#[derive(Subcommand)]
+pub enum WorktreeArgs {
+    /// Convert the current project into worktree form
+    Init(WorktreeInitArgs),
+    /// Add a worktree for a new branch
+    Add(WorktreeAddArgs),
+    /// List all worktrees in this project
+    List(WorktreeListArgs),
+    /// Remove a worktree
+    Rm(WorktreeRmArgs),
+}
+
+#[derive(Parser)]
+pub struct WorktreeInitArgs {}
+
+#[derive(Parser)]
+pub struct WorktreeAddArgs {
+    /// Branch name (a matching branch is created if it does not exist)
+    pub branch: String,
+
+    /// Branch or commit to base the new worktree on (default: the current HEAD)
+    #[arg(long)]
+    pub start_point: Option<String>,
+
+    /// Start an agent container inside the new worktree
+    #[arg(long)]
+    pub run: bool,
+
+    /// Container options, only used together with --run
+    #[command(flatten)]
+    pub opts: RunOpts,
+}
+
+#[derive(Parser)]
+pub struct WorktreeListArgs {
+    /// Output format (table, json)
+    #[arg(short, long, default_value = "table")]
+    pub format: String,
+}
+
+#[derive(Parser)]
+pub struct WorktreeRmArgs {
+    /// Branch whose worktree should be removed
+    pub branch: String,
+
+    /// Discard uncommitted changes and any attached container record
+    #[arg(long)]
+    pub force: bool,
 }

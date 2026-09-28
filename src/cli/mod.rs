@@ -1,3 +1,6 @@
 pub mod args;
 
-pub use args::{Cli, Commands, DeleteArgs, ListArgs, RunArgs, RunOpts, StatusArgs};
+pub use args::{
+    Cli, Commands, DeleteArgs, ListArgs, RunArgs, RunOpts, StatusArgs, WorktreeAddArgs,
+    WorktreeArgs, WorktreeListArgs, WorktreeRmArgs,
+};

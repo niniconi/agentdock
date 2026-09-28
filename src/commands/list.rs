@@ -79,7 +79,7 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
     Ok(())
 }
 
-fn print_table(headers: &[&str], rows: &[Vec<String>]) {
+pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
     let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
 
     for row in rows {
