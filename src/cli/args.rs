@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -20,8 +20,8 @@ pub enum Commands {
     Status(StatusArgs),
 }
 
-#[derive(Parser)]
-pub struct RunArgs {
+#[derive(Args, Clone)]
+pub struct RunOpts {
     /// Agent config format: {docker_image}/{agent_name} (e.g., nixos/opencode)
     #[arg(short, long, default_value = "nixos/pi-agent")]
     pub agent: String,
@@ -30,17 +30,9 @@ pub struct RunArgs {
     #[arg(long)]
     pub rm: bool,
 
-    /// Host mount directory (default: current directory)
-    #[arg(short, long)]
-    pub path: Option<PathBuf>,
-
     /// Custom initialization script
     #[arg(short, long)]
     pub init: Option<String>,
-
-    /// Record identifier name
-    #[arg(short, long)]
-    pub name: Option<String>,
 
     /// Map host /dev/kvm into container (for KVM virtualization)
     #[arg(long)]
@@ -57,6 +49,20 @@ pub struct RunArgs {
     /// Port mapping (e.g., 8080:80, 3000:3000). Can be specified multiple times.
     #[arg(short = 'P', long = "port", value_name = "HOST:CONTAINER")]
     pub port: Vec<String>,
+}
+
+#[derive(Parser)]
+pub struct RunArgs {
+    #[command(flatten)]
+    pub opts: RunOpts,
+
+    /// Host mount directory (default: current directory)
+    #[arg(short, long)]
+    pub path: Option<PathBuf>,
+
+    /// Record identifier name
+    #[arg(short, long)]
+    pub name: Option<String>,
 }
 
 impl RunArgs {

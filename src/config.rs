@@ -1,4 +1,4 @@
-use crate::cli::RunArgs;
+use crate::cli::RunOpts;
 
 /// Validate port mapping format (HOST:CONTAINER)
 pub fn validate_port_mapping(port: &str) -> Result<(), String> {
@@ -60,14 +60,14 @@ pub struct RunOptions {
     pub ports: Vec<String>,
 }
 
-impl From<&RunArgs> for RunOptions {
-    fn from(args: &RunArgs) -> Self {
+impl From<&RunOpts> for RunOptions {
+    fn from(opts: &RunOpts) -> Self {
         Self {
-            rm: args.rm,
-            kvm: args.kvm,
-            http_proxy: args.http_proxy.clone(),
-            https_proxy: args.https_proxy.clone(),
-            ports: args.port.clone(),
+            rm: opts.rm,
+            kvm: opts.kvm,
+            http_proxy: opts.http_proxy.clone(),
+            https_proxy: opts.https_proxy.clone(),
+            ports: opts.port.clone(),
         }
     }
 }
