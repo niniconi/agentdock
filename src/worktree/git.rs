@@ -1,4 +1,6 @@
 use anyhow::{bail, Context, Result};
+
+use crate::error::GitError;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -21,16 +23,29 @@ impl WorktreeEntry {
 }
 
 /// Run a git command, returning stdout. Bails with git's stderr on failure.
+///
+/// A missing git is reported separately from a failing command; otherwise a
+/// missing binary surfaces as "not inside a git repository", which blames the
+/// user's directory for a problem with their PATH.
 fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .current_dir(cwd)
         .args(args)
         .output()
-        .with_context(|| format!("Failed to execute git {}", args.join(" ")))?;
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                GitError::ToolMissing.into()
+            } else {
+                anyhow::Error::new(e).context(format!("Failed to execute git {}", args.join(" ")))
+            }
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git {} failed: {}", args.join(" "), stderr.trim());
+        bail!(GitError::Command {
+            args: args.join(" "),
+            stderr: stderr.trim().to_string(),
+        });
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -49,10 +64,32 @@ fn git_quiet(cwd: &Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-pub fn is_inside_work_tree(cwd: &Path) -> bool {
-    git_quiet(cwd, &["rev-parse", "--is-inside-work-tree"])
+/// Like `git_quiet`, but a missing binary is reported rather than folded into
+/// `None`, which would otherwise read as "not a repository".
+fn git_probe(cwd: &Path, args: &[&str]) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                GitError::ToolMissing.into()
+            } else {
+                anyhow::Error::new(e).context(format!("Failed to execute git {}", args.join(" ")))
+            }
+        })?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&output.stdout).to_string()))
+}
+
+/// `Err` carries a missing git; `Ok(false)` means the directory is not in a
+/// worktree.
+pub fn is_inside_work_tree(cwd: &Path) -> Result<bool> {
+    Ok(git_probe(cwd, &["rev-parse", "--is-inside-work-tree"])?
         .map(|s| s.trim() == "true")
-        .unwrap_or(false)
+        .unwrap_or(false))
 }
 
 /// Absolute path of the worktree root containing `cwd`.
@@ -75,10 +112,8 @@ pub fn symbolic_branch(cwd: &Path) -> Result<String> {
             }
             Ok(name)
         }
-        Err(_) => bail!(
-            "HEAD is detached. Please check out a branch before running this command.\n\
-             e.g. git switch -c <branch-name>"
-        ),
+        Err(e) if matches!(e.downcast_ref::<GitError>(), Some(GitError::ToolMissing)) => Err(e),
+        Err(_) => bail!(GitError::DetachedHead),
     }
 }
 

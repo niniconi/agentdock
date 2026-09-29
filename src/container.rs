@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::config::{AgentConfig, RunOptions};
 use crate::docker::{ContainerStatus, DockerClient};
-use crate::error;
+use crate::error::ContainerError;
 use crate::init::run_init_script;
 use crate::state::{Record, StateManager};
 
@@ -99,7 +99,7 @@ pub fn handle_existing(
             Ok(name)
         }
         ContainerStatus::NotFound => {
-            bail!("{}", error::container_not_found_error(&name));
+            bail!(ContainerError::NotFound { name });
         }
     }
 }

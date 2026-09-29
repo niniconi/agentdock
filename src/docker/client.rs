@@ -1,9 +1,36 @@
 use anyhow::{bail, Result};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use super::types::ContainerStatus;
 use crate::config::{AgentConfig, RunOptions};
+use crate::error::ContainerError;
+
+/// Run docker, reporting a missing binary separately from a command failure.
+///
+/// Without this, an absent docker surfaces as "No such file or directory",
+/// which reads as if the container had no command rather than docker missing.
+fn docker(args: &[&str]) -> Result<Output> {
+    Command::new("docker").args(args).output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ContainerError::ToolMissing.into()
+        } else {
+            anyhow::Error::new(e).context("Failed to execute docker")
+        }
+    })
+}
+
+/// Bail with the docker command's own stderr, trimmed of its trailing newline.
+fn check(op: &'static str, output: &Output) -> Result<()> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(ContainerError::Command {
+            op,
+            stderr: stderr.trim().to_string(),
+        });
+    }
+    Ok(())
+}
 
 pub struct DockerClient;
 
@@ -63,20 +90,13 @@ impl DockerClient {
         args.push("sleep".to_string());
         args.push("inf".to_string());
 
-        let output = Command::new("docker").args(&args).output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to start container: {}", stderr);
-        }
-
-        Ok(())
+        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let output = docker(&refs)?;
+        check("start container", &output)
     }
 
     pub fn inspect(name: &str) -> Result<ContainerStatus> {
-        let output = Command::new("docker")
-            .args(["inspect", "-f", "{{.State.Running}}", name])
-            .output()?;
+        let output = docker(&["inspect", "-f", "{{.State.Running}}", name])?;
 
         if !output.status.success() {
             return Ok(ContainerStatus::NotFound);
@@ -93,14 +113,8 @@ impl DockerClient {
     }
 
     pub fn restart(name: &str) -> Result<()> {
-        let output = Command::new("docker").args(["restart", name]).output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to restart container: {}", stderr);
-        }
-
-        Ok(())
+        let output = docker(&["restart", name])?;
+        check("restart container", &output)
     }
 
     pub fn exec(name: &str, command: &str) -> Result<()> {
@@ -109,52 +123,29 @@ impl DockerClient {
             .status()?;
 
         if !status.success() {
-            bail!(
-                "Command execution failed, exit code: {}",
-                status.code().unwrap_or(-1)
-            );
+            bail!(ContainerError::ExecFailed {
+                code: status.code().unwrap_or(-1),
+            });
         }
 
         Ok(())
     }
 
     pub fn cp(name: &str, src: &Path, dst: &str) -> Result<()> {
-        let output = Command::new("docker")
-            .args([
-                "cp",
-                &src.display().to_string(),
-                &format!("{}:{}", name, dst),
-            ])
-            .output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to copy file to container: {}", stderr);
-        }
-
-        Ok(())
+        let src = src.display().to_string();
+        let target = format!("{}:{}", name, dst);
+        let output = docker(&["cp", &src, &target])?;
+        check("copy file to container", &output)
     }
 
     #[allow(dead_code)]
     pub fn stop(name: &str) -> Result<()> {
-        let output = Command::new("docker").args(["stop", name]).output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to stop container: {}", stderr);
-        }
-
-        Ok(())
+        let output = docker(&["stop", name])?;
+        check("stop container", &output)
     }
 
     pub fn destroy(name: &str) -> Result<()> {
-        let output = Command::new("docker").args(["rm", "-f", name]).output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("Failed to remove container: {}", stderr);
-        }
-
-        Ok(())
+        let output = docker(&["rm", "-f", name])?;
+        check("remove container", &output)
     }
 }

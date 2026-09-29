@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::error::RecordError;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Record {
     pub path: PathBuf,
@@ -51,10 +53,10 @@ impl StateManager {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let data = fs::read_to_string(&path).context("Failed to read persistent records")?;
-        let manager: Self =
-            serde_json::from_str(&data).context("Failed to parse persistent records")?;
-        Ok(manager)
+        // A malformed file is an error rather than an empty table: falling back
+        // to default would let the next save() overwrite what the user had.
+        let data = fs::read_to_string(&path).map_err(|_| RecordError::Read)?;
+        serde_json::from_str(&data).map_err(|_| RecordError::Parse.into())
     }
 
     pub fn save(&self) -> Result<()> {

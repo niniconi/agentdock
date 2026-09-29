@@ -2,13 +2,14 @@ use anyhow::{bail, Result};
 
 use crate::cli::DeleteArgs;
 use crate::docker::{ContainerStatus, DockerClient};
+use crate::error::ContainerError;
 use crate::state::StateManager;
 
 pub fn execute_delete(args: DeleteArgs) -> Result<()> {
     let mut state = StateManager::new()?;
 
     if state.find_by_name(&args.name).is_none() {
-        bail!("Container '{}' not found in managed records", args.name);
+        bail!(ContainerError::NotInRecords { name: args.name });
     }
 
     let status = DockerClient::inspect(&args.name)?;
@@ -26,10 +27,7 @@ pub fn execute_delete(args: DeleteArgs) -> Result<()> {
     } else {
         match status {
             ContainerStatus::Running => {
-                bail!(
-                    "Container '{}' is running. Use --force to remove it.",
-                    args.name
-                );
+                bail!(ContainerError::RunningWithoutForce { name: args.name });
             }
             ContainerStatus::Stopped => {
                 DockerClient::destroy(&args.name)?;

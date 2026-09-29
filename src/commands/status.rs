@@ -2,6 +2,7 @@ use anyhow::{bail, Result};
 
 use crate::cli::StatusArgs;
 use crate::docker::{ContainerStatus, DockerClient};
+use crate::error::ContainerError;
 use crate::state::StateManager;
 
 pub fn execute_status(args: StatusArgs) -> Result<()> {
@@ -10,7 +11,7 @@ pub fn execute_status(args: StatusArgs) -> Result<()> {
     let record = match state.find_by_name(&args.name) {
         Some(record) => record,
         None => {
-            bail!("Container '{}' not found in managed records", args.name);
+            bail!(ContainerError::NotInRecords { name: args.name });
         }
     };
 

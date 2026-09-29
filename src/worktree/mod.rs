@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::cli::{WorktreeAddArgs, WorktreeListArgs, WorktreeRmArgs};
-use crate::error;
+use crate::error::{format_conflicts, ContainerError, WorktreeError};
 use crate::state::StateManager;
 
 const MARKER_FILE: &str = ".agentdock.json";
@@ -59,7 +59,9 @@ fn write_marker(container: &Path, marker: &Marker) -> Result<()> {
 /// instead of exposing the marker filename.
 fn read_marker_or_explain(container: &Path) -> Result<Marker> {
     if !marker_path(container).is_file() {
-        bail!("{}", error::not_in_worktree_project_error(container));
+        bail!(WorktreeError::NotInWorktreeProject {
+            path: container.to_path_buf(),
+        });
     }
     read_marker(container)
 }
@@ -87,14 +89,18 @@ pub fn resolve_container(start: &Path) -> Result<PathBuf> {
         return Ok(parent.to_path_buf());
     }
 
-    bail!("{}", error::not_in_worktree_project_error(start))
+    bail!(WorktreeError::NotInWorktreeProject {
+        path: start.to_path_buf(),
+    })
 }
 
 /// Absolute path of the main worktree, used as the git dir for all operations.
 fn main_worktree(container: &Path, marker: &Marker) -> Result<PathBuf> {
     let main = container.join(&marker.main);
     if !main.join(".git").exists() {
-        bail!("{}", error::main_worktree_missing_error(&main));
+        bail!(WorktreeError::MainWorktreeMissing {
+            path: main.to_path_buf(),
+        });
     }
     Ok(main)
 }
@@ -102,8 +108,10 @@ fn main_worktree(container: &Path, marker: &Marker) -> Result<PathBuf> {
 pub fn init() -> Result<()> {
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
 
-    if !git::is_inside_work_tree(&cwd) {
-        bail!("{}", error::not_a_git_repo_error(&cwd));
+    if !git::is_inside_work_tree(&cwd)? {
+        bail!(WorktreeError::NotAGitRepo {
+            path: cwd.to_path_buf(),
+        });
     }
 
     let toplevel = git::toplevel(&cwd)?
@@ -111,13 +119,19 @@ pub fn init() -> Result<()> {
         .context("Failed to resolve the worktree root")?;
 
     if marker_path(&toplevel).exists() {
-        bail!("{}", error::already_converted_error(&toplevel));
+        bail!(WorktreeError::AlreadyConverted {
+            path: toplevel.to_path_buf(),
+        });
     }
     if toplevel.parent().is_some_and(|p| marker_path(p).exists()) {
-        bail!("{}", error::nested_project_error(&toplevel));
+        bail!(WorktreeError::NestedProject {
+            path: toplevel.to_path_buf(),
+        });
     }
     if toplevel.parent().is_none() {
-        bail!("{}", error::no_parent_dir_error(&toplevel));
+        bail!(WorktreeError::NoParentDir {
+            path: toplevel.to_path_buf(),
+        });
     }
 
     // Refuse when agentdock containers are already mounted inside this project:
@@ -125,7 +139,10 @@ pub fn init() -> Result<()> {
     let state = StateManager::new()?;
     let conflicts = state.find_within(&toplevel);
     if !conflicts.is_empty() {
-        bail!("{}", error::worktree_conflict_error(&toplevel, &conflicts));
+        bail!(WorktreeError::ContainerConflict {
+            path: toplevel.to_path_buf(),
+            conflicts: format_conflicts(&conflicts),
+        });
     }
 
     let branch = git::symbolic_branch(&toplevel)?;
@@ -137,7 +154,9 @@ pub fn init() -> Result<()> {
     let target = toplevel.join(&main_name);
 
     if target.exists() {
-        bail!("{}", error::target_exists_error(&target));
+        bail!(WorktreeError::TargetExists {
+            path: target.to_path_buf(),
+        });
     }
 
     // Snapshot the existing linked worktrees before anything moves.
@@ -158,7 +177,9 @@ pub fn init() -> Result<()> {
         // moves together with the repository, so the source stops existing the
         // moment the main worktree is renamed.
         if entry.path.starts_with(&toplevel) {
-            bail!("{}", error::worktree_inside_repo_error(&entry.path));
+            bail!(WorktreeError::WorktreeInsideRepo {
+                path: entry.path.to_path_buf(),
+            });
         }
 
         let label = match &entry.branch {
@@ -169,28 +190,25 @@ pub fn init() -> Result<()> {
         let dest = toplevel.join(&dir);
 
         if dest == target {
-            bail!(
-                "{}",
-                error::destination_collision_error(&dest, "the main worktree")
-            );
+            bail!(WorktreeError::DestinationCollision {
+                path: dest,
+                taken_by: "the main worktree".to_string(),
+            });
         }
         // Distinct branches can flatten to the same directory name, e.g. `a/b`
         // and `a-b`. Neither destination exists yet, so only comparing against
         // what is already on disk would miss the clash.
         if !planned.insert(dest.clone()) {
-            bail!(
-                "{}",
-                error::destination_collision_error(
-                    &dest,
-                    &format!("another branch that also maps to '{}'", dir)
-                )
-            );
+            bail!(WorktreeError::DestinationCollision {
+                path: dest,
+                taken_by: format!("another branch that also maps to '{}'", dir),
+            });
         }
         if dest.exists() {
-            bail!(
-                "{}",
-                error::destination_collision_error(&dest, &format!("branch '{}'", label))
-            );
+            bail!(WorktreeError::DestinationCollision {
+                path: dest,
+                taken_by: format!("branch '{}'", label),
+            });
         }
 
         moves.push((entry.path.clone(), dest, label));
@@ -198,7 +216,7 @@ pub fn init() -> Result<()> {
 
     let stage = stage_path(&toplevel, &repo_name);
     if stage.exists() {
-        bail!("{}", error::stale_stage_dir_error(&stage));
+        bail!(WorktreeError::StaleStageDir { path: stage });
     }
 
     println!("Converting project into worktree form...");
@@ -286,10 +304,9 @@ pub fn add(args: &WorktreeAddArgs) -> Result<()> {
     let main = main_worktree(&container, &marker)?;
 
     if git::branch_exists(&main, &args.branch) && args.start_point.is_some() {
-        bail!(
-            "{}",
-            error::existing_branch_with_start_point_error(&args.branch)
-        );
+        bail!(WorktreeError::ExistingBranchWithStartPoint {
+            branch: args.branch.clone(),
+        });
     }
 
     // Report an occupied branch before the path check, otherwise adding the
@@ -298,7 +315,10 @@ pub fn add(args: &WorktreeAddArgs) -> Result<()> {
     let existing = git::worktree_list(&main)?;
     if let Some(entry) = find_worktree(&existing, &main, &args.branch, Match::Strict) {
         if entry.branch.is_some() {
-            bail!("{}", error::branch_in_use_error(&args.branch, &entry.path));
+            bail!(WorktreeError::BranchInUse {
+                branch: args.branch.clone(),
+                path: entry.path,
+            });
         }
     }
 
@@ -310,13 +330,13 @@ pub fn add(args: &WorktreeAddArgs) -> Result<()> {
         // with a bare "directory already exists" and no hint why.
         if let Some(entry) = find_worktree(&existing, &main, &args.branch, Match::Loose) {
             if entry.branch.is_none() {
-                bail!(
-                    "{}",
-                    error::name_taken_by_detached_error(&args.branch, &entry.path)
-                );
+                bail!(WorktreeError::NameTakenByDetached {
+                    name: args.branch.clone(),
+                    path: entry.path,
+                });
             }
         }
-        bail!("{}", error::target_exists_error(&path));
+        bail!(WorktreeError::TargetExists { path });
     }
 
     println!("Creating worktree for branch '{}'...", args.branch);
@@ -354,7 +374,11 @@ fn annotate_add_failure(err: anyhow::Error, main: &Path, branch: &str) -> anyhow
     let entries = git::worktree_list(main).unwrap_or_default();
     for entry in entries {
         if entry.branch.as_deref() == Some(branch) {
-            return anyhow::anyhow!("{}", error::branch_in_use_error(branch, &entry.path));
+            return WorktreeError::BranchInUse {
+                branch: branch.to_string(),
+                path: entry.path,
+            }
+            .into();
         }
     }
     err
@@ -476,11 +500,15 @@ pub fn rm(args: &WorktreeRmArgs) -> Result<()> {
     let main = main_worktree(&container, &marker)?;
 
     let entries = git::worktree_list(&main)?;
-    let target = find_worktree(&entries, &main, &args.branch, Match::Loose)
-        .with_context(|| error::worktree_not_found_error(&args.branch, &container))?;
+    let target = find_worktree(&entries, &main, &args.branch, Match::Loose).ok_or_else(|| {
+        WorktreeError::WorktreeNotFound {
+            branch: args.branch.clone(),
+            container: container.clone(),
+        }
+    })?;
 
     if target.path == main {
-        bail!("{}", error::cannot_remove_main_error(&target.path));
+        bail!(WorktreeError::CannotRemoveMain { path: target.path });
     }
 
     let mut state = StateManager::new()?;
@@ -490,7 +518,10 @@ pub fn rm(args: &WorktreeRmArgs) -> Result<()> {
 
     if let Some(name) = attached {
         if !args.force {
-            bail!("{}", error::container_attached_error(&name, &target.path));
+            bail!(ContainerError::Attached {
+                name,
+                path: target.path,
+            });
         }
         state.remove(&name);
         state.save()?;
