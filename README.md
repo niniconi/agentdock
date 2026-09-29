@@ -37,8 +37,8 @@ myproject/
   myproject-feat-login/
 ```
 
-Every worktree lives in its own directory named `{repo}-{branch}`, and each one
-can run its own agent container:
+A worktree on a branch lives in a directory named `{repo}-{branch}`, with
+slashes flattened, and each one can run its own agent container:
 
 ```bash
 agentdock worktree add dev
@@ -62,15 +62,41 @@ cannot be reused for a new branch.
 
 `--run` creates the worktree and then starts a container inside it, so the
 container is bound to that worktree's path. Container options (`--agent`,
-`--port`, `--kvm`, proxies, `--init`) are shared with `run`.
+`--port`, `--kvm`, proxies, `--init`) are shared with `run`; `--path` and
+`--name` are not, because the worktree determines both.
+
+`--start-point <branch-or-commit>` bases a newly created branch on something
+other than the current `HEAD`. It only applies to branches agentdock creates,
+so it cannot be combined with a branch that already exists.
 
 Because the worktree directory doubles as the container mount path, each
 worktree gets an independent container via the usual path-based de-duplication.
 
 `worktree init` moves the whole repository directory rather than the files alone,
-which keeps the index, uncommitted changes and untracked files untouched. It
-refuses to run if the project already has agentdock containers mounted inside
-it, since those records point at the pre-move paths.
+which keeps the index, uncommitted changes and untracked files untouched. Any
+linked worktrees that already exist are moved into the container as well, and
+their `.git` pointers are repaired afterwards, since those hold absolute paths
+to their old locations.
+
+`worktree init` either converts the project completely or leaves it untouched.
+It refuses to run when the layout could not be resolved up front:
+
+- the project already has agentdock containers mounted inside it, because
+  those records point at the pre-move paths
+- a linked worktree lives inside the repository, which would relocate it out
+  from under git. Move it out first with `git worktree move <path> <outside>`
+- two branches flatten to the same directory name, e.g. `a/b` and `a-b`
+- a leftover `.myproject.agentdock-stage` directory is present, which means a
+  previous conversion was interrupted
+
+`worktree list` shows a worktree as `stale` when its directory has been deleted
+while git still tracks it. Remove it with `worktree rm <branch>` to clear the
+registration.
+
+`worktree rm` refuses while a container is attached to the worktree. Delete the
+container first with `agentdock delete <name>`, or pass `--force` to drop both.
+`--force` also discards any uncommitted changes in that worktree, so without it
+git rejects the removal instead.
 
 ## Build
 
