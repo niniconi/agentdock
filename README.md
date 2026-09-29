@@ -5,7 +5,7 @@ Docker-based AI Agent Manager. Manages persistent Docker containers for running 
 ## Usage
 
 ```bash
-agentdock [OPTIONS]
+agentdock <COMMAND>
 ```
 
 ### Commands
