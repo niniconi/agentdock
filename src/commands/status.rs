@@ -5,7 +5,7 @@ use crate::docker::{ContainerStatus, DockerClient};
 use crate::state::StateManager;
 
 pub fn execute_status(args: StatusArgs) -> Result<()> {
-    let state = StateManager::new();
+    let state = StateManager::new()?;
 
     let record = match state.find_by_name(&args.name) {
         Some(record) => record,

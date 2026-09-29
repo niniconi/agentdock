@@ -5,7 +5,7 @@ use crate::docker::{ContainerStatus, DockerClient};
 use crate::state::StateManager;
 
 pub fn execute_list(args: ListArgs) -> Result<()> {
-    let state = StateManager::new();
+    let state = StateManager::new()?;
     let records = state.get_all();
 
     if records.is_empty() {

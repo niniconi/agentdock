@@ -10,7 +10,7 @@ use crate::state::StateManager;
 pub fn execute_run(args: RunArgs) -> Result<()> {
     let mount_path = args.get_mount_path();
     let agent_config = AgentConfig::parse(&args.opts.agent).map_err(|e| anyhow::anyhow!(e))?;
-    let mut state = StateManager::new();
+    let mut state = StateManager::new()?;
     let opts = RunOptions::from(&args.opts);
 
     // Validate port mappings

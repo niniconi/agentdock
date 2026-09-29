@@ -25,19 +25,27 @@ pub fn handle_existing(
         .as_deref()
         .or(record.init_content.as_deref());
 
+    let proxy_changed =
+        record.http_proxy != opts.http_proxy || record.https_proxy != opts.https_proxy;
+    let ports_changed = record
+        .ports
+        .as_ref()
+        .map_or(!opts.ports.is_empty(), |p| p != &opts.ports);
+    // Without this the container keeps running the old image while `exec` is
+    // handed the new agent, so the two silently disagree.
+    let image_changed = record.docker_image != agent_config.docker_image;
+    let agent_changed = record.agent_name != agent_config.agent_name;
+    let recreate = proxy_changed || ports_changed || image_changed || agent_changed;
+
     match status {
         ContainerStatus::Running => {
-            let proxy_changed =
-                record.http_proxy != opts.http_proxy || record.https_proxy != opts.https_proxy;
-            let ports_changed = record
-                .ports
-                .as_ref()
-                .map_or(!opts.ports.is_empty(), |p| p != &opts.ports);
-            if proxy_changed || ports_changed {
-                println!(
-                    "Proxy/port settings changed, recreating running container: {}",
-                    name
-                );
+            if recreate {
+                let reason = if image_changed || agent_changed {
+                    "Image/agent settings changed"
+                } else {
+                    "Proxy/port settings changed"
+                };
+                println!("{}, recreating running container: {}", reason, name);
                 DockerClient::stop(&name)?;
                 DockerClient::destroy(&name)?;
                 DockerClient::run(&name, agent_config, mount_path, opts)?;
@@ -51,6 +59,8 @@ pub fn handle_existing(
                 } else {
                     Some(opts.ports.clone())
                 };
+                updated.docker_image = agent_config.docker_image.clone();
+                updated.agent_name = agent_config.agent_name.clone();
                 state.insert(name.clone(), updated);
                 state.save()?;
             }
@@ -58,17 +68,13 @@ pub fn handle_existing(
             Ok(name)
         }
         ContainerStatus::Stopped => {
-            let proxy_changed =
-                record.http_proxy != opts.http_proxy || record.https_proxy != opts.https_proxy;
-            let ports_changed = record
-                .ports
-                .as_ref()
-                .map_or(!opts.ports.is_empty(), |p| p != &opts.ports);
-            if proxy_changed || ports_changed {
-                println!(
-                    "Proxy/port settings changed, recreating stopped container: {}",
-                    name
-                );
+            if recreate {
+                let reason = if image_changed || agent_changed {
+                    "Image/agent settings changed"
+                } else {
+                    "Proxy/port settings changed"
+                };
+                println!("{}, recreating stopped container: {}", reason, name);
                 DockerClient::destroy(&name)?;
                 DockerClient::run(&name, agent_config, mount_path, opts)?;
                 run_init_script(&name, init_content)?;
@@ -81,6 +87,8 @@ pub fn handle_existing(
                 } else {
                     Some(opts.ports.clone())
                 };
+                updated.docker_image = agent_config.docker_image.clone();
+                updated.agent_name = agent_config.agent_name.clone();
                 state.insert(name.clone(), updated);
                 state.save()?;
             } else {
@@ -121,6 +129,8 @@ pub fn start_new(
             } else {
                 Some(opts.ports.clone())
             },
+            docker_image: agent_config.docker_image.clone(),
+            agent_name: agent_config.agent_name.clone(),
         };
         state.insert(name.to_string(), record);
         state.save()?;

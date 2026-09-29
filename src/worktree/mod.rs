@@ -122,7 +122,7 @@ pub fn init() -> Result<()> {
 
     // Refuse when agentdock containers are already mounted inside this project:
     // their records point at the pre-move paths and would silently go stale.
-    let state = StateManager::new();
+    let state = StateManager::new()?;
     let conflicts = state.find_within(&toplevel);
     if !conflicts.is_empty() {
         bail!("{}", error::worktree_conflict_error(&toplevel, &conflicts));
@@ -366,7 +366,7 @@ pub fn list(args: &WorktreeListArgs) -> Result<()> {
     let marker = read_marker_or_explain(&container)?;
     let main = main_worktree(&container, &marker)?;
 
-    let state = StateManager::new();
+    let state = StateManager::new()?;
     let entries = git::worktree_list(&main)?;
 
     let mut rows: Vec<Vec<String>> = Vec::new();
@@ -483,7 +483,7 @@ pub fn rm(args: &WorktreeRmArgs) -> Result<()> {
         bail!("{}", error::cannot_remove_main_error(&target.path));
     }
 
-    let mut state = StateManager::new();
+    let mut state = StateManager::new()?;
     let attached = state
         .find_by_path(&target.path)
         .map(|(name, _)| name.to_string());

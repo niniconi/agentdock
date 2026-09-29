@@ -17,6 +17,10 @@ pub struct Record {
     pub https_proxy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ports: Option<Vec<String>>,
+    /// Image the container was created from.
+    pub docker_image: String,
+    /// Agent executable passed to `docker exec`.
+    pub agent_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -25,8 +29,12 @@ pub struct StateManager {
 }
 
 impl StateManager {
-    pub fn new() -> Self {
-        Self::load().unwrap_or_default()
+    /// Load the records, treating an unreadable or malformed file as an error.
+    ///
+    /// Returning an empty manager here would be worse than failing: the next
+    /// `save()` would overwrite whatever the user actually had.
+    pub fn new() -> Result<Self> {
+        Self::load()
     }
 
     fn config_dir() -> Result<PathBuf> {
@@ -55,7 +63,12 @@ impl StateManager {
 
         let path = Self::records_path()?;
         let data = serde_json::to_string_pretty(self).context("Failed to serialize records")?;
-        fs::write(&path, data).context("Failed to write persistent records")?;
+
+        // Write to a sibling then rename, so an interrupted write cannot leave a
+        // truncated file that the next load would silently discard.
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, data).context("Failed to write persistent records")?;
+        fs::rename(&tmp, &path).context("Failed to replace persistent records")?;
         Ok(())
     }
 

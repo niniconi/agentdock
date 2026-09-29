@@ -5,7 +5,7 @@ use crate::docker::{ContainerStatus, DockerClient};
 use crate::state::StateManager;
 
 pub fn execute_delete(args: DeleteArgs) -> Result<()> {
-    let mut state = StateManager::new();
+    let mut state = StateManager::new()?;
 
     if state.find_by_name(&args.name).is_none() {
         bail!("Container '{}' not found in managed records", args.name);
