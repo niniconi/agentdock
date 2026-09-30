@@ -27,14 +27,14 @@ cargo fmt --check
 ## Environment requirements
 
 Both `docker` and `git` are invoked as plain binaries through `std::process::Command`.
-Neither is checked up front, so a missing tool surfaces late and opaquely.
+Neither is checked up front, so a missing tool surfaces late, but both now report the tool by
+name (`docker is not installed or not on PATH`) rather than a bare OS error.
 
 - **`git` must be on PATH** for the `worktree` subcommand and for the integration suite.
 - **`docker` must be on PATH** for `run`/`list`/`delete`/`status`. Without it, `run` prints
   `Starting new container: ...` and then fails with
-  `No such file or directory (os error 2)`. That error is the missing binary, not a bug in
-  the change you are testing. Records are written only after the container starts, so a
-  failure here leaves no stale state.
+  `docker is not installed or not on PATH`. Records are written only after the container
+  starts, so a failure here leaves no stale state.
 - **Unit tests do not need git.** Only the integration suite does.
 
 ## Testing
@@ -94,5 +94,12 @@ not have them, or it rejects valid branch names that merely resemble a detached 
 - Commit messages follow Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`) with a
   body of `-` bullets. History is on `master` and pushed directly to it.
 - `rustfmt` and `clippy -D warnings` are clean across the tree. Match that.
-- Error text for user-facing failures belongs in `src/error.rs` as `*_error()` helpers taking
-  paths and names, not inline `bail!` strings. Follow that when adding a failure mode.
+- Failures a user can act on belong in `src/error.rs` as a `thiserror` variant
+  (`WorktreeError`, `ContainerError`, `RecordError`, `GitError`) raised with `bail!`. The
+  variant carries the path or name it interpolates and owns its entire message, suggested
+  commands included, so no user-facing sentence is assembled at a call site.
+- Failures that are pure plumbing (IO, serde) stay as `.context("...")` on the underlying
+  error. That is what preserves the `Caused by:` chain, so prefer it over a variant that
+  drops the source. The two invariants in `git.rs` (`Failed to determine the worktree root`,
+  `Failed to determine the current branch`) are the deliberate exception and stay plain
+  `bail!` strings.
