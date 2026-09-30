@@ -112,8 +112,18 @@ pub fn symbolic_branch(cwd: &Path) -> Result<String> {
             }
             Ok(name)
         }
-        Err(e) if matches!(e.downcast_ref::<GitError>(), Some(GitError::ToolMissing)) => Err(e),
-        Err(_) => bail!(GitError::DetachedHead),
+        Err(e) if is_detached_head(&e) => bail!(GitError::DetachedHead),
+        // A missing binary or a damaged repository is not a detached HEAD, and
+        // telling the user to run `git switch` would send them the wrong way.
+        Err(e) => Err(e),
+    }
+}
+
+/// Whether git refused because HEAD is a raw commit id rather than a ref.
+fn is_detached_head(err: &anyhow::Error) -> bool {
+    match err.downcast_ref::<GitError>() {
+        Some(GitError::Command { stderr, .. }) => stderr.contains("not a symbolic ref"),
+        _ => false,
     }
 }
 
