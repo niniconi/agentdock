@@ -239,6 +239,30 @@ fn a_malformed_records_file_is_not_overwritten() {
 }
 
 #[test]
+fn a_malformed_records_file_still_explains_why() {
+    let mut sb = Sandbox::new("whyrecords");
+    // `docker_image` is a required field, so this file does not deserialize.
+    // Both RecordError variants carry their source, so the failure has to reach
+    // the user: without it the whole message is "Failed to parse persistent
+    // records" and there is nothing to act on.
+    sb.write_records("{\"records\": {\"box\": {\"path\": \"/tmp\", \"created_at\": \"x\"}}}");
+
+    let out = sb.run(&["status", "box"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        stderr.contains("Failed to parse persistent records"),
+        "missing the summary: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("docker_image"),
+        "the parse error must name the offending field: {}",
+        stderr
+    );
+}
+
+#[test]
 fn a_stopped_container_is_restarted_not_recreated() {
     let mut sb = Sandbox::new("stopped");
     sb.run(&["run", "-a", "img/agent", "-n", "box"]);

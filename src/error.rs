@@ -221,10 +221,10 @@ Suggested actions:
 #[derive(Debug, thiserror::Error)]
 pub enum RecordError {
     #[error("Failed to read persistent records")]
-    Read,
+    Read(#[source] std::io::Error),
 
     #[error("Failed to parse persistent records")]
-    Parse,
+    Parse(#[source] serde_json::Error),
 }
 
 #[derive(Debug, thiserror::Error)]

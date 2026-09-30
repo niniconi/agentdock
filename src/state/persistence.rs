@@ -55,8 +55,9 @@ impl StateManager {
         }
         // A malformed file is an error rather than an empty table: falling back
         // to default would let the next save() overwrite what the user had.
-        let data = fs::read_to_string(&path).map_err(|_| RecordError::Read)?;
-        serde_json::from_str(&data).map_err(|_| RecordError::Parse.into())
+        let data = fs::read_to_string(&path).map_err(RecordError::Read)?;
+        let manager: Self = serde_json::from_str(&data).map_err(RecordError::Parse)?;
+        Ok(manager)
     }
 
     pub fn save(&self) -> Result<()> {
