@@ -6,6 +6,26 @@ A single-binary Rust CLI that manages long-lived Docker containers for AI agents
 `worktree` subcommand that restructures a project into a container of git worktrees so
 several agents can work in parallel.
 
+## Project status
+
+Pre-release: `0.1.0`, untagged, no CI. Breaking changes are cheap here, so do not add upgrade
+shims or migration code for state an earlier build wrote, and do not keep a superseded field
+alive out of caution. Remove the old path rather than carrying it for someone who never
+shipped it.
+
+Two files persist across builds, so a format change in either is felt by anyone who ran an
+earlier version:
+
+- **`~/.config/agentdock/records.json`.** `Record` carries no version field. Its `Option`
+  fields use `#[serde(default)]` and so tolerate a format change; its required fields do
+  not, so adding one makes an older file fail to parse and takes `list`, `status` and `delete`
+  down together. That is an accepted outcome, not something to code around.
+- **`.agentdock.json`.** Unlike records, this one marks a project whose directory `worktree
+  init` has already **renamed**. `MARKER_VERSION` is written but `read_marker` never compares
+  it, so a marker with any value deserializes. A change to how worktrees are laid out or
+  named would therefore be applied silently to an already-converted project, whose original
+  location no longer exists.
+
 ## Commands
 
 ```bash
