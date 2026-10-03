@@ -13,6 +13,7 @@ use crate::state::{Record, StateManager};
 /// back inside `recreate_container`, and those two have to stay in step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Drift {
+    Mount,
     Image,
     Agent,
     Ports,
@@ -23,6 +24,7 @@ pub enum Drift {
 impl Drift {
     fn label(self) -> &'static str {
         match self {
+            Self::Mount => "mount",
             Self::Image => "image",
             Self::Agent => "agent",
             Self::Ports => "ports",
@@ -35,9 +37,21 @@ impl Drift {
 /// What the container was built with that differs from what is being asked for
 /// now. Empty means the existing container is still correct and only has to be
 /// reached, not rebuilt.
-fn detect(record: &Record, agent_config: &AgentConfig, opts: &RunOptions) -> Vec<Drift> {
+fn detect(
+    record: &Record,
+    agent_config: &AgentConfig,
+    mount_path: &Path,
+    opts: &RunOptions,
+) -> Vec<Drift> {
     let mut drift = Vec::new();
 
+    // The container serves whichever directory `run` was called from, and the
+    // record has to follow it. Leaving the recorded path behind would make a
+    // later bare run hand back a container mounted somewhere else, and would
+    // make find_by_path miss it entirely.
+    if record.path != mount_path {
+        drift.push(Drift::Mount);
+    }
     // Without the image and the agent the container keeps running the old
     // image while `exec` is handed the new agent, so the two silently disagree.
     if record.docker_image != agent_config.docker_image {
@@ -77,7 +91,10 @@ fn recreate_container(
     DockerClient::run(name, agent_config, mount_path, opts)?;
     run_init_script(name, init_content)?;
 
+    // Every setting detect looks at has to be written back, or the next run
+    // sees the same drift and rebuilds a container that is already correct.
     let mut updated = record.clone();
+    updated.path = mount_path.to_path_buf();
     updated.docker_image = agent_config.docker_image.clone();
     updated.agent_name = agent_config.agent_name.clone();
     updated.ports = (!opts.ports.is_empty()).then(|| opts.ports.clone());
@@ -112,7 +129,7 @@ pub fn handle_existing(
     // one is already down, and is the only case that can just be restarted.
     let stopped = matches!(status, ContainerStatus::Stopped);
 
-    let drift = detect(record, agent_config, opts);
+    let drift = detect(record, agent_config, mount_path, opts);
 
     if drift.is_empty() {
         if stopped {
