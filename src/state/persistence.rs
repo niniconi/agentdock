@@ -23,6 +23,9 @@ pub struct Record {
     pub docker_image: String,
     /// Agent executable passed to `docker exec`.
     pub agent_name: String,
+    /// Whether /dev/kvm was mapped in. `docker run` consumes it, so without
+    /// recording it a later change could never be applied.
+    pub kvm: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]

@@ -169,19 +169,41 @@ pub enum ContainerError {
     #[error(
         "Associated container '{name}' does not exist
 
+The container was removed outside agentdock, while its record remained.
+
 Possible causes:
-  1. Container was manually deleted: docker rm {name}
-  2. Started with --rm flag, container was auto-deleted after exit
-  3. Docker environment was reset
+  1. Manually deleted: docker rm {name}
+  2. Docker environment was reset
 
 Suggested actions:
-  - Re-run agentdock to start a new instance
-  - Or manually clean up records: ~/.config/agentdock/records.json"
+  - agentdock apply -n {name}     # recreate it from its recorded settings
+  - Or drop the record: agentdock delete {name}"
     )]
     NotFound { name: String },
 
     #[error("Container '{name}' not found in managed records")]
     NotInRecords { name: String },
+
+    #[error(
+        "No container is managed {name}
+
+This command starts what agentdock already configured, it does not create one.
+
+Suggested actions:
+  - agentdock apply{flag}     # create it from the flags you just passed"
+    )]
+    NotManaged { name: String, flag: String },
+
+    #[error(
+        "Container '{name}' is already in that configuration.
+
+Applying again would only rebuild it, which discards everything inside it.
+
+Suggested actions:
+  - agentdock up -n {name}      # start it as it is
+  - Or add --force to recreate anyway"
+    )]
+    AlreadyMatches { name: String },
 
     #[error(
         "Container '{name}' is running.

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 use super::types::ContainerStatus;
-use crate::config::{AgentConfig, RunOptions};
+use crate::config::Config;
 use crate::error::ContainerError;
 
 /// Run docker, reporting a missing binary separately from a command failure.
@@ -35,12 +35,11 @@ fn check(op: &'static str, output: &Output) -> Result<()> {
 pub struct DockerClient;
 
 impl DockerClient {
-    pub fn run(
-        name: &str,
-        config: &AgentConfig,
-        mount_path: &Path,
-        opts: &RunOptions,
-    ) -> Result<()> {
+    /// Create a container from `config`, serving `mount_path` at /workspace.
+    ///
+    /// The mount path is not part of the configuration: it locates the
+    /// container, while the config describes how it is built.
+    pub fn run(name: &str, config: &Config, mount_path: &Path) -> Result<()> {
         let mut args = vec![
             "run".to_string(),
             "-d".to_string(),
@@ -48,29 +47,25 @@ impl DockerClient {
             name.to_string(),
         ];
 
-        if opts.rm {
-            args.push("--rm".to_string());
-        }
-
         // Mount workspace directory
         let mount = format!("{}:/workspace", mount_path.display());
         args.push("-v".to_string());
         args.push(mount);
 
         // Mount host /dev/kvm for KVM virtualization
-        if opts.kvm {
+        if config.kvm {
             args.push("--device".to_string());
             args.push("/dev/kvm".to_string());
         }
 
         // Set proxy environment variables
-        if let Some(ref proxy) = opts.http_proxy {
+        if let Some(ref proxy) = config.http_proxy {
             args.push("-e".to_string());
             args.push(format!("HTTP_PROXY={}", proxy));
             args.push("-e".to_string());
             args.push(format!("http_proxy={}", proxy));
         }
-        if let Some(ref proxy) = opts.https_proxy {
+        if let Some(ref proxy) = config.https_proxy {
             args.push("-e".to_string());
             args.push(format!("HTTPS_PROXY={}", proxy));
             args.push("-e".to_string());
@@ -78,7 +73,7 @@ impl DockerClient {
         }
 
         // Port mappings
-        for port in &opts.ports {
+        for port in &config.ports {
             args.push("-p".to_string());
             args.push(port.clone());
         }

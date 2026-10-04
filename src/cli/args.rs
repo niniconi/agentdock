@@ -10,8 +10,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Start or manage an AI agent container
-    Run(RunArgs),
+    /// Create a container, or change an existing one to match the given settings
+    Apply(ApplyArgs),
+    /// Start an existing container without changing how it was built
+    Up(UpArgs),
     /// List all managed containers
     List(ListArgs),
     /// Delete a container and its record
@@ -23,19 +25,18 @@ pub enum Commands {
     Worktree(WorktreeArgs),
 }
 
-/// Options shared by `run` and `worktree add --run`.
+/// Options shared by `apply` and `worktree add --apply`.
 ///
 /// Lives in its own struct so the worktree subcommand can reuse the exact same
 /// flags instead of duplicating them.
 #[derive(Args, Clone)]
-pub struct RunOpts {
+pub struct ApplyOpts {
     /// Agent config format: {docker_image}/{agent_name} (e.g., nixos/opencode)
-    #[arg(short, long, default_value = "nixos/pi-agent")]
-    pub agent: String,
-
-    /// Auto-delete container after exit
-    #[arg(long)]
-    pub rm: bool,
+    ///
+    /// An existing container keeps the agent it was created with. A new
+    /// container defaults to nixos/pi-agent.
+    #[arg(short, long)]
+    pub agent: Option<String>,
 
     /// Custom initialization script
     #[arg(short, long)]
@@ -54,12 +55,15 @@ pub struct RunOpts {
     pub https_proxy: Option<String>,
 
     /// Port mapping (e.g., 8080:80, 3000:3000). Can be specified multiple times.
+    ///
+    /// Omitted keeps the ports the container already has. An empty list clears
+    /// them, which is why this is Option: a bare Vec cannot tell the two apart.
     #[arg(short = 'P', long = "port", value_name = "HOST:CONTAINER")]
-    pub port: Vec<String>,
+    pub port: Option<Vec<String>>,
 }
 
 #[derive(Parser)]
-pub struct RunArgs {
+pub struct ApplyArgs {
     /// Host mount directory (default: current directory)
     #[arg(short, long)]
     pub path: Option<PathBuf>,
@@ -68,11 +72,34 @@ pub struct RunArgs {
     #[arg(short, long)]
     pub name: Option<String>,
 
+    /// Recreate even when the container already matches these settings
+    #[arg(long)]
+    pub force: bool,
+
     #[command(flatten)]
-    pub opts: RunOpts,
+    pub opts: ApplyOpts,
 }
 
-impl RunArgs {
+impl ApplyArgs {
+    pub fn get_mount_path(&self) -> PathBuf {
+        self.path
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().expect("Failed to get current directory"))
+    }
+}
+
+#[derive(Parser)]
+pub struct UpArgs {
+    /// Host mount directory (default: current directory)
+    #[arg(short, long)]
+    pub path: Option<PathBuf>,
+
+    /// Record identifier name
+    #[arg(short, long)]
+    pub name: Option<String>,
+}
+
+impl UpArgs {
     pub fn get_mount_path(&self) -> PathBuf {
         self.path
             .clone()
@@ -135,13 +162,13 @@ pub struct WorktreeAddArgs {
     #[arg(long)]
     pub start_point: Option<String>,
 
-    /// Start an agent container inside the new worktree
+    /// Create and start an agent container inside the new worktree
     #[arg(long)]
-    pub run: bool,
+    pub apply: bool,
 
-    /// Container options, only used together with --run
+    /// Container options, only used together with --apply
     #[command(flatten)]
-    pub opts: RunOpts,
+    pub opts: ApplyOpts,
 }
 
 #[derive(Parser)]

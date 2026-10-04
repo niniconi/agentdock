@@ -229,7 +229,7 @@ fn init_refuses_when_container_records_exist_inside_the_project() {
     std::fs::write(
         records.join("records.json"),
         format!(
-            r#"{{"records":{{"in-sub":{{"path":"{}","created_at":"2026-01-01T00:00:00Z","docker_image":"img","agent_name":"agent"}}}}}}"#,
+            r#"{{"records":{{"in-sub":{{"path":"{}","created_at":"2026-01-01T00:00:00Z","docker_image":"img","agent_name":"agent","kvm":false}}}}}}"#,
             sb.path("proj/sub").display()
         ),
     )
@@ -314,7 +314,7 @@ fn rm_on_a_detached_worktree_still_checks_for_an_attached_container() {
     std::fs::write(
         records.join("records.json"),
         format!(
-            r#"{{"records":{{"det-c":{{"path":"{}","created_at":"2026-01-01T00:00:00Z","docker_image":"img","agent_name":"agent"}}}}}}"#,
+            r#"{{"records":{{"det-c":{{"path":"{}","created_at":"2026-01-01T00:00:00Z","docker_image":"img","agent_name":"agent","kvm":false}}}}}}"#,
             sb.path(&format!("proj/proj-{}", short)).display()
         ),
     )

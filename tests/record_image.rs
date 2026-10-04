@@ -160,10 +160,10 @@ fn assert_recorded(records: &str, image: &str, agent: &str) {
 #[test]
 fn changing_image_recreates_the_container() {
     let mut sb = Sandbox::new("changeimage");
-    sb.run(&["run", "-a", "imageA/agentA", "-n", "box", "-P", "8080:80"]);
+    sb.run(&["apply", "-a", "imageA/agentA", "-n", "box", "-P", "8080:80"]);
 
     sb.reset_log();
-    sb.run(&["run", "-a", "imageB/agentB", "-n", "box", "-P", "8080:80"]);
+    sb.run(&["apply", "-a", "imageB/agentB", "-n", "box", "-P", "8080:80"]);
 
     let log = sb.log();
     assert!(
@@ -182,29 +182,143 @@ fn changing_image_recreates_the_container() {
 }
 
 #[test]
-fn unchanged_agent_does_not_recreate_the_container() {
+fn applying_identical_settings_is_refused() {
     let mut sb = Sandbox::new("nochange");
-    sb.run(&["run", "-a", "img/agent", "-n", "box", "-P", "8080:80"]);
+    sb.run(&["apply", "-a", "img/agent", "-n", "box", "-P", "8080:80"]);
 
     sb.reset_log();
-    sb.run(&["run", "-a", "img/agent", "-n", "box", "-P", "8080:80"]);
+    let out = sb.run(&["apply", "-a", "img/agent", "-n", "box", "-P", "8080:80"]);
+
+    assert!(
+        !out.status.success(),
+        "an unchanged apply must refuse rather than rebuild: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        !recreated(&sb.log()),
+        "nothing should have been recreated: {}",
+        sb.log()
+    );
+}
+
+#[test]
+fn force_recreates_an_unchanged_container() {
+    let mut sb = Sandbox::new("force");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+
+    sb.reset_log();
+    let out = sb.run(&["apply", "-a", "img/agent", "-n", "box", "--force"]);
+
+    assert!(
+        out.status.success(),
+        "force must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        recreated(&sb.log()),
+        "--force must recreate anyway: {}",
+        sb.log()
+    );
+}
+
+/// `up` has no configuration flags, so nothing it is given can change how the
+/// container was built. This is the case that used to rebuild on every call.
+#[test]
+fn up_never_recreates_the_container() {
+    let mut sb = Sandbox::new("upnorecreate");
+    sb.run(&["apply", "-a", "imageA/agentA", "-n", "box", "-P", "8080:80"]);
+
+    sb.reset_log();
+    sb.run(&["up", "-n", "box"]);
 
     let log = sb.log();
+    assert!(!recreated(&log), "up must not recreate: {}", log);
+    assert_eq!(exec_agent(&log).as_deref(), Some("agentA"));
+    assert_recorded(&sb.records(), "imageA", "agentA");
+}
+
+/// A bare `up` reaches the container by mount path, as `run` used to.
+#[test]
+fn a_bare_up_reaches_the_container() {
+    let mut sb = Sandbox::new("bareup");
+    sb.run(&["apply", "-a", "imageA/agentA", "-n", "box"]);
+
+    sb.reset_log();
+    sb.run(&["up"]);
+
+    let log = sb.log();
+    assert!(!recreated(&log), "up must not recreate: {}", log);
+    assert_eq!(exec_agent(&log).as_deref(), Some("agentA"));
+}
+
+/// `up` does not create containers, so an unknown one has to say what does.
+#[test]
+fn up_refuses_to_create_a_container() {
+    let mut sb = Sandbox::new("upnocreate");
+    let out = sb.run(&["up", "-n", "ghost"]);
+
+    assert!(!out.status.success(), "up must not create");
     assert!(
-        !recreated(&log),
-        "identical settings must not recreate: {}",
+        !sb.log().contains("docker run"),
+        "no container should be created: {}",
+        sb.log()
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("apply"),
+        "the error should point at apply: {}",
+        err
+    );
+}
+
+/// Omitting a flag keeps what the container already has, rather than reading as
+/// a request to clear it.
+#[test]
+fn an_omitted_flag_keeps_the_recorded_setting() {
+    let mut sb = Sandbox::new("inheritall");
+    sb.run(&[
+        "apply",
+        "-a",
+        "imageA/agentA",
+        "-n",
+        "box",
+        "-P",
+        "8080:80",
+        "--http-proxy",
+        "http://p:3128",
+    ]);
+
+    // Only the agent is mentioned, so the ports and proxy must survive.
+    sb.reset_log();
+    let out = sb.run(&["apply", "-a", "imageB/agentB", "-n", "box"]);
+
+    assert!(
+        out.status.success(),
+        "apply must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = sb.log();
+    let run_line = log.lines().find(|l| l.contains("docker run")).unwrap_or("");
+    assert!(
+        run_line.contains("-p 8080:80"),
+        "ports must be inherited: {}",
         log
     );
-    assert_eq!(exec_agent(&log).as_deref(), Some("agent"));
+    assert!(
+        run_line.contains("HTTP_PROXY=http://p:3128"),
+        "proxy must be inherited: {}",
+        log
+    );
+    assert_recorded(&sb.records(), "imageB", "agentB");
 }
 
 #[test]
 fn changing_only_the_agent_recreates_the_container() {
     let mut sb = Sandbox::new("agentonly");
-    sb.run(&["run", "-a", "img/one", "-n", "box"]);
+    sb.run(&["apply", "-a", "img/one", "-n", "box"]);
 
     sb.reset_log();
-    sb.run(&["run", "-a", "img/two", "-n", "box"]);
+    sb.run(&["apply", "-a", "img/two", "-n", "box"]);
 
     let log = sb.log();
     assert!(recreated(&log), "changing the agent must recreate: {}", log);
@@ -220,7 +334,7 @@ fn a_malformed_records_file_is_not_overwritten() {
 
     // Treating an unparseable file as "no records" would let the next save()
     // replace whatever the user actually had, so the run must fail instead.
-    let out = sb.run(&["run", "-a", "img/agent", "-n", "box"]);
+    let out = sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
     assert!(
         !out.status.success(),
         "a malformed records file must not be silently accepted: {}",
@@ -263,16 +377,16 @@ fn a_malformed_records_file_still_explains_why() {
 }
 
 #[test]
-fn a_stopped_container_is_restarted_not_recreated() {
+fn up_restarts_a_stopped_container() {
     let mut sb = Sandbox::new("stopped");
-    sb.run(&["run", "-a", "img/agent", "-n", "box"]);
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
     assert_recorded(&sb.records(), "img", "agent");
 
-    // The container is gone from docker's point of view, so the next run takes
-    // the Stopped path and restarts rather than recreating.
+    // The container is down from docker's point of view, so bringing it up is a
+    // restart rather than a rebuild.
     let _ = std::fs::remove_file(&sb.running);
     sb.reset_log();
-    sb.run(&["run", "-a", "img/agent", "-n", "box"]);
+    sb.run(&["up", "-n", "box"]);
 
     let log = sb.log();
     assert!(restarted(&log), "expected a restart: {}", log);

@@ -346,18 +346,19 @@ pub fn add(args: &WorktreeAddArgs) -> Result<()> {
     println!("Worktree created: {}", path.display());
 
     // TODO: the container options are flattened onto `add` unconditionally, so
-    // `worktree add dev -a some/image` without `--run` parses fine and is then
-    // discarded here without a word. Either reject options when `run` is unset,
-    // or warn that they were ignored.
-    if args.run {
+    // `worktree add dev -a some/image` without `--apply` parses fine and is then
+    // discarded here without a word. Either reject options when `apply` is
+    // unset, or warn that they were ignored.
+    if args.apply {
         // The worktree directory doubles as the mount path, so the container is
         // bound to this worktree and stays independent from the others.
-        let run_args = crate::cli::RunArgs {
+        let apply_args = crate::cli::ApplyArgs {
             path: Some(path.clone()),
             name: Some(dir_name.clone()),
+            force: false,
             opts: args.opts.clone(),
         };
-        crate::commands::execute_run(run_args)?;
+        crate::commands::execute_apply(apply_args)?;
     }
 
     Ok(())
