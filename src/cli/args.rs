@@ -33,10 +33,9 @@ pub enum Commands {
 pub struct ApplyOpts {
     /// Agent config format: {docker_image}/{agent_name} (e.g., nixos/opencode)
     ///
-    /// An existing container keeps the agent it was created with. A new
-    /// container defaults to nixos/pi-agent.
-    #[arg(short, long)]
-    pub agent: Option<String>,
+    /// Defaults to nixos/pi-agent.
+    #[arg(short, long, default_value = "nixos/pi-agent")]
+    pub agent: String,
 
     /// Custom initialization script
     #[arg(short, long)]
@@ -56,10 +55,10 @@ pub struct ApplyOpts {
 
     /// Port mapping (e.g., 8080:80, 3000:3000). Can be specified multiple times.
     ///
-    /// Omitted keeps the ports the container already has. An empty list clears
-    /// them, which is why this is Option: a bare Vec cannot tell the two apart.
+    /// Omitted means no ports are published: apply replaces the configuration
+    /// rather than merging into it.
     #[arg(short = 'P', long = "port", value_name = "HOST:CONTAINER")]
-    pub port: Option<Vec<String>>,
+    pub port: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -71,10 +70,6 @@ pub struct ApplyArgs {
     /// Record identifier name
     #[arg(short, long)]
     pub name: Option<String>,
-
-    /// Recreate even when the container already matches these settings
-    #[arg(long)]
-    pub force: bool,
 
     #[command(flatten)]
     pub opts: ApplyOpts,

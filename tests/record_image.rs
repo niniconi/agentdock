@@ -182,43 +182,86 @@ fn changing_image_recreates_the_container() {
 }
 
 #[test]
-fn applying_identical_settings_is_refused() {
-    let mut sb = Sandbox::new("nochange");
-    sb.run(&["apply", "-a", "img/agent", "-n", "box", "-P", "8080:80"]);
-
-    sb.reset_log();
-    let out = sb.run(&["apply", "-a", "img/agent", "-n", "box", "-P", "8080:80"]);
-
-    assert!(
-        !out.status.success(),
-        "an unchanged apply must refuse rather than rebuild: {}",
-        String::from_utf8_lossy(&out.stdout)
-    );
-    assert!(
-        !recreated(&sb.log()),
-        "nothing should have been recreated: {}",
-        sb.log()
-    );
-}
-
-#[test]
-fn force_recreates_an_unchanged_container() {
-    let mut sb = Sandbox::new("force");
+fn apply_always_recreates_an_existing_container() {
+    let mut sb = Sandbox::new("alwaysrecreate");
     sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
 
     sb.reset_log();
-    let out = sb.run(&["apply", "-a", "img/agent", "-n", "box", "--force"]);
+    let out = sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
 
     assert!(
         out.status.success(),
-        "force must succeed: {}",
+        "apply must not refuse: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
         recreated(&sb.log()),
-        "--force must recreate anyway: {}",
+        "apply replaces the configuration, so it rebuilds: {}",
         sb.log()
     );
+}
+
+/// A flag left out is a flag that is turned off. Nothing is inherited from what
+/// the container had, which is what makes a repeat apply mean something.
+#[test]
+fn an_omitted_flag_turns_the_setting_off() {
+    let mut sb = Sandbox::new("override");
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/agent",
+        "-n",
+        "box",
+        "-P",
+        "8080:80",
+        "--http-proxy",
+        "http://p:3128",
+        "--kvm",
+    ]);
+    assert_eq!(
+        sb.records().matches("\"kvm\": true").count(),
+        1,
+        "the first apply should record kvm: {}",
+        sb.records()
+    );
+
+    // Only the agent is named, so ports, proxy and kvm all go.
+    sb.reset_log();
+    sb.run(&["apply", "-a", "img/two", "-n", "box"]);
+
+    let log = sb.log();
+    let run_line = log.lines().find(|l| l.contains("docker run")).unwrap_or("");
+    assert!(
+        !run_line.contains("-p "),
+        "ports must be gone: {}",
+        run_line
+    );
+    assert!(
+        !run_line.contains("HTTP_PROXY"),
+        "the proxy must be gone: {}",
+        run_line
+    );
+    assert!(
+        !run_line.contains("--device"),
+        "kvm must be gone: {}",
+        run_line
+    );
+    assert_eq!(
+        sb.records().matches("\"kvm\": true").count(),
+        0,
+        "kvm must be false in the record: {}",
+        sb.records()
+    );
+    assert!(!sb.records().contains("8080:80"), "ports must be gone");
+    assert!(!sb.records().contains("3128"), "the proxy must be gone");
+}
+
+#[test]
+fn apply_without_an_agent_uses_the_default() {
+    let mut sb = Sandbox::new("defaultagent");
+    sb.run(&["apply", "-n", "box"]);
+
+    assert_recorded(&sb.records(), "nixos", "pi-agent");
 }
 
 /// `up` has no configuration flags, so nothing it is given can change how the
@@ -269,47 +312,6 @@ fn up_refuses_to_create_a_container() {
         "the error should point at apply: {}",
         err
     );
-}
-
-/// Omitting a flag keeps what the container already has, rather than reading as
-/// a request to clear it.
-#[test]
-fn an_omitted_flag_keeps_the_recorded_setting() {
-    let mut sb = Sandbox::new("inheritall");
-    sb.run(&[
-        "apply",
-        "-a",
-        "imageA/agentA",
-        "-n",
-        "box",
-        "-P",
-        "8080:80",
-        "--http-proxy",
-        "http://p:3128",
-    ]);
-
-    // Only the agent is mentioned, so the ports and proxy must survive.
-    sb.reset_log();
-    let out = sb.run(&["apply", "-a", "imageB/agentB", "-n", "box"]);
-
-    assert!(
-        out.status.success(),
-        "apply must succeed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let log = sb.log();
-    let run_line = log.lines().find(|l| l.contains("docker run")).unwrap_or("");
-    assert!(
-        run_line.contains("-p 8080:80"),
-        "ports must be inherited: {}",
-        log
-    );
-    assert!(
-        run_line.contains("HTTP_PROXY=http://p:3128"),
-        "proxy must be inherited: {}",
-        log
-    );
-    assert_recorded(&sb.records(), "imageB", "agentB");
 }
 
 #[test]

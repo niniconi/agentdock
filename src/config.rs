@@ -52,13 +52,13 @@ impl AgentConfig {
     }
 }
 
-/// The state a container is meant to be in.
+/// The state a container should be in, taken entirely from the command line.
 ///
-/// Assembled from the command line and a record, so every field carries a
-/// value: once a container exists there is no such thing as an unset setting.
-/// That is what makes two configurations comparable without guessing whether an
-/// omitted flag meant "leave it alone" or "clear it".
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Nothing is inherited from a record. `apply` replaces the configuration
+/// rather than merging into it, so a flag left out is a flag that is turned
+/// off: no ports, no proxy, no KVM. That matches `docker run`, which also
+/// builds the container from the arguments it was given and nothing else.
+#[derive(Debug, Clone)]
 pub struct Config {
     pub docker_image: String,
     pub agent_name: String,
@@ -71,34 +71,11 @@ pub struct Config {
 }
 
 impl Config {
-    /// What the command line asks for, falling back to the record field by
-    /// field.
-    ///
-    /// A field the command line omits keeps the recorded value, so repeating an
-    /// apply without flags describes the same container rather than a stripped
-    /// one.
-    pub fn resolve(opts: &ApplyOpts, agent: AgentConfig, record: &Record) -> Self {
-        Self {
-            ports: opts
-                .port
-                .clone()
-                .or_else(|| record.ports.clone())
-                .unwrap_or_default(),
-            http_proxy: opts.http_proxy.clone().or(record.http_proxy.clone()),
-            https_proxy: opts.https_proxy.clone().or(record.https_proxy.clone()),
-            // A boolean flag cannot say "leave it alone", so it only changes the
-            // configuration when passed.
-            kvm: if opts.kvm { true } else { record.kvm },
-            ..Self::of(record).with_agent(agent)
-        }
-    }
-
-    /// A config for a container that does not exist yet, so nothing to inherit.
     pub fn new(agent: AgentConfig, opts: &ApplyOpts) -> Self {
         Self {
             docker_image: agent.docker_image,
             agent_name: agent.agent_name,
-            ports: opts.port.clone().unwrap_or_default(),
+            ports: opts.port.clone(),
             http_proxy: opts.http_proxy.clone(),
             https_proxy: opts.https_proxy.clone(),
             init_content: None,
@@ -106,7 +83,8 @@ impl Config {
         }
     }
 
-    /// The configuration a record describes.
+    /// The configuration a record describes, for a command that reads it rather
+    /// than writing it.
     pub fn of(record: &Record) -> Self {
         Self {
             docker_image: record.docker_image.clone(),
@@ -116,14 +94,6 @@ impl Config {
             https_proxy: record.https_proxy.clone(),
             init_content: record.init_content.clone(),
             kvm: record.kvm,
-        }
-    }
-
-    fn with_agent(self, agent: AgentConfig) -> Self {
-        Self {
-            docker_image: agent.docker_image,
-            agent_name: agent.agent_name,
-            ..self
         }
     }
 

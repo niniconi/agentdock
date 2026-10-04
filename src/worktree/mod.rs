@@ -355,7 +355,6 @@ pub fn add(args: &WorktreeAddArgs) -> Result<()> {
         let apply_args = crate::cli::ApplyArgs {
             path: Some(path.clone()),
             name: Some(dir_name.clone()),
-            force: false,
             opts: args.opts.clone(),
         };
         crate::commands::execute_apply(apply_args)?;

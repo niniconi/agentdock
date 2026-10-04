@@ -195,17 +195,6 @@ Suggested actions:
     NotManaged { name: String, flag: String },
 
     #[error(
-        "Container '{name}' is already in that configuration.
-
-Applying again would only rebuild it, which discards everything inside it.
-
-Suggested actions:
-  - agentdock up -n {name}      # start it as it is
-  - Or add --force to recreate anyway"
-    )]
-    AlreadyMatches { name: String },
-
-    #[error(
         "Container '{name}' is running.
 
 Suggested actions:
