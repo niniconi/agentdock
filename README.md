@@ -12,11 +12,40 @@ agentdock <COMMAND>
 
 | Command | Description |
 | --- | --- |
-| `run` | Start or manage an AI agent container |
+| `apply` | Create a container, or change an existing one to match the given settings |
+| `up` | Start an existing container without changing how it was built |
 | `list` | List all managed containers |
 | `delete` | Delete a container and its record |
 | `status` | Show container status |
 | `worktree` | Convert a project into git worktree form |
+
+## Applying and starting
+
+`apply` is where a container's configuration lives. Given a name or a directory
+with no record, it creates one; given one that already exists, it changes that
+container to match.
+
+```bash
+agentdock apply -a nixos/opencode -P 8080:80
+agentdock apply -n box -P 9090:80      # change the published port
+agentdock apply -n box --force         # recreate even if nothing changed
+```
+
+A flag you leave out keeps whatever the container already has, so repeating an
+apply with fewer flags never strips a setting. `apply` refuses to recreate a
+container that already matches the request, because that would discard whatever
+is inside it for no reason; `--force` asks for it anyway.
+
+`up` starts a container and takes no configuration flags, so nothing passed to
+it can change how the container was built:
+
+```bash
+agentdock up -n box        # start, or restart if it is stopped
+agentdock up               # the container serving this directory
+```
+
+It does not create containers. Where there is nothing to start it says so and
+points at `apply`.
 
 ## Worktrees
 
@@ -42,7 +71,7 @@ slashes flattened, and each one can run its own agent container:
 
 ```bash
 agentdock worktree add dev
-agentdock worktree add feat/login --run --agent nixos/opencode
+agentdock worktree add feat/login --apply --agent nixos/opencode
 agentdock worktree list
 agentdock worktree rm feat/login
 ```
@@ -60,9 +89,9 @@ worktree  8f2a1c4  myproject-8f2a1c4   8f2a1c4
 Because a detached worktree is named after its short commit id, that name
 cannot be reused for a new branch.
 
-`--run` creates the worktree and then starts a container inside it, so the
+`--apply` creates the worktree and then creates a container inside it, so the
 container is bound to that worktree's path. Container options (`--agent`,
-`--port`, `--kvm`, proxies, `--init`) are shared with `run`; `--path` and
+`--port`, `--kvm`, proxies, `--init`) are shared with `apply`; `--path` and
 `--name` are not, because the worktree determines both.
 
 `--start-point <branch-or-commit>` bases a newly created branch on something

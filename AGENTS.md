@@ -19,7 +19,9 @@ earlier version:
 - **`~/.config/agentdock/records.json`.** `Record` carries no version field. Its `Option`
   fields use `#[serde(default)]` and so tolerate a format change; its required fields do
   not, so adding one makes an older file fail to parse and takes `list`, `status` and `delete`
-  down together. That is an accepted outcome, not something to code around.
+  down together. That is an accepted outcome, not something to code around. `kvm` is a
+  required field, added because `docker run` consumes it and without recording it a later
+  change could never be applied.
 - **`.agentdock.json`.** Unlike records, this one marks a project whose directory `worktree
   init` has already **renamed**. `MARKER_VERSION` is written but `read_marker` never compares
   it, so a marker with any value deserializes. A change to how worktrees are laid out or
@@ -51,8 +53,8 @@ Neither is checked up front, so a missing tool surfaces late, but both now repor
 name (`docker is not installed or not on PATH`) rather than a bare OS error.
 
 - **`git` must be on PATH** for the `worktree` subcommand and for the integration suite.
-- **`docker` must be on PATH** for `run`/`list`/`delete`/`status`. Without it, `run` prints
-  `Starting new container: ...` and then fails with
+- **`docker` must be on PATH** for `apply`/`up`/`list`/`delete`/`status`. Without it, `apply`
+  prints `Creating container: ...` and then fails with
   `docker is not installed or not on PATH`. Records are written only after the container
   starts, so a failure here leaves no stale state.
 - **Unit tests do not need git.** Only the integration suite does.
@@ -74,8 +76,15 @@ API. Most are `pub` only to cross module boundaries.
 - `src/main.rs` parses args and dispatches. Holds no logic.
 - `src/commands/` is one file per subcommand, each exposing `execute_*`. This is the
   established pattern, so add new subcommands here.
-- `src/cli/args.rs` holds every clap struct. `RunOpts` is flattened into both `RunArgs` and
-  `WorktreeAddArgs` so the two share container flags.
+- `src/cli/args.rs` holds every clap struct. `ApplyOpts` is flattened into both `ApplyArgs` and
+  `WorktreeAddArgs` so the two share container flags. Its `agent` and `port` are `Option`
+  because a clap default applies to every call, not just the one creating a container, and a
+  bare `Vec` cannot tell an omitted flag from a cleared one.
+- `Config` in `src/config.rs` is what a container should be built like, with every field
+  carrying a value. `Config::resolve` merges the command line onto a record and `Config::of`
+  reads one back, so whether a rebuild is needed is a single `==` rather than a list of
+  per-field comparisons to keep in step with the write-back. `up` carries no configuration
+  flags by design, which is what keeps a bare `up` from rebuilding anything.
 - `src/docker/client.rs` shells out to `docker`. Note the one exception: `exec` runs
   `docker exec -it <name> sh -c <command>`, and `container.rs` passes the agent name from
   `-a {image}/{agent_name}` into that shell, so a crafted agent name is interpreted by the
