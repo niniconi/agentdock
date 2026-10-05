@@ -1,3 +1,3 @@
 pub mod persistence;
 
-pub use persistence::{now_string, Record, StateManager};
+pub use persistence::{Record, StateManager, now_string};

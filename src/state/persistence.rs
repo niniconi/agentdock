@@ -85,10 +85,10 @@ impl StateManager {
     pub fn find_by_path(&self, path: &Path) -> Option<(&str, &Record)> {
         let canonical = path.canonicalize().ok()?;
         for (name, record) in &self.records {
-            if let Ok(record_canonical) = record.path.canonicalize() {
-                if record_canonical == canonical {
-                    return Some((name.as_str(), record));
-                }
+            if let Ok(record_canonical) = record.path.canonicalize()
+                && record_canonical == canonical
+            {
+                return Some((name.as_str(), record));
             }
         }
         None

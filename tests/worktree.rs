@@ -252,9 +252,11 @@ fn rm_removes_a_detached_worktree_by_its_short_commit() {
     };
     let repo = make_repo(&sb, "proj", "main");
     git(&repo, &["worktree", "add", "-q", "--detach", "../det"]);
-    assert!(agentdock(&repo, &sb.home(), &["worktree", "init"])
-        .status
-        .success());
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
 
     let main = sb.path("proj/proj-main");
     // `list` names a detached worktree after its short commit, and `rm` must
@@ -296,9 +298,11 @@ fn rm_on_a_detached_worktree_still_checks_for_an_attached_container() {
     };
     let repo = make_repo(&sb, "proj", "main");
     git(&repo, &["worktree", "add", "-q", "--detach", "../det"]);
-    assert!(agentdock(&repo, &sb.home(), &["worktree", "init"])
-        .status
-        .success());
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
 
     let main = sb.path("proj/proj-main");
     let short = stdout(&agentdock(&main, &sb.home(), &["worktree", "list"]))
@@ -349,9 +353,11 @@ fn add_refuses_a_name_taken_by_a_detached_worktree() {
     };
     let repo = make_repo(&sb, "proj", "main");
     git(&repo, &["worktree", "add", "-q", "--detach", "../det"]);
-    assert!(agentdock(&repo, &sb.home(), &["worktree", "init"])
-        .status
-        .success());
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
 
     let main = sb.path("proj/proj-main");
     let short = stdout(&agentdock(&main, &sb.home(), &["worktree", "list"]))
@@ -382,9 +388,11 @@ fn add_accepts_a_branch_named_like_a_detached_worktree_directory() {
     };
     let repo = make_repo(&sb, "proj", "main");
     git(&repo, &["worktree", "add", "-q", "--detach", "../det"]);
-    assert!(agentdock(&repo, &sb.home(), &["worktree", "init"])
-        .status
-        .success());
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
 
     let main = sb.path("proj/proj-main");
     let short = stdout(&agentdock(&main, &sb.home(), &["worktree", "list"]))
@@ -421,9 +429,11 @@ fn init_refuses_a_second_time() {
         return;
     };
     let repo = make_repo(&sb, "proj", "main");
-    assert!(agentdock(&repo, &sb.home(), &["worktree", "init"])
-        .status
-        .success());
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
 
     let main = sb.path("proj/proj-main");
     let out = agentdock(&main, &sb.home(), &["worktree", "init"]);
@@ -436,9 +446,11 @@ fn add_flattens_branch_names_and_stays_usable() {
         return;
     };
     let repo = make_repo(&sb, "proj", "main");
-    assert!(agentdock(&repo, &sb.home(), &["worktree", "init"])
-        .status
-        .success());
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
 
     let main = sb.path("proj/proj-main");
     let out = agentdock(&main, &sb.home(), &["worktree", "add", "feat/login"]);
@@ -458,9 +470,11 @@ fn add_refuses_a_branch_that_is_already_checked_out() {
         return;
     };
     let repo = make_repo(&sb, "proj", "main");
-    assert!(agentdock(&repo, &sb.home(), &["worktree", "init"])
-        .status
-        .success());
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
 
     let main = sb.path("proj/proj-main");
     let out = agentdock(&main, &sb.home(), &["worktree", "add", "main"]);
@@ -504,14 +518,18 @@ fn list_marks_worktrees_whose_directory_is_gone() {
         return;
     };
     let repo = make_repo(&sb, "proj", "main");
-    assert!(agentdock(&repo, &sb.home(), &["worktree", "init"])
-        .status
-        .success());
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
 
     let main = sb.path("proj/proj-main");
-    assert!(agentdock(&main, &sb.home(), &["worktree", "add", "dev"])
-        .status
-        .success());
+    assert!(
+        agentdock(&main, &sb.home(), &["worktree", "add", "dev"])
+            .status
+            .success()
+    );
     std::fs::remove_dir_all(sb.path("proj/proj-dev")).expect("remove worktree dir");
 
     let out = agentdock(&main, &sb.home(), &["worktree", "list"]);
@@ -529,9 +547,11 @@ fn rm_protects_the_main_worktree() {
         return;
     };
     let repo = make_repo(&sb, "proj", "main");
-    assert!(agentdock(&repo, &sb.home(), &["worktree", "init"])
-        .status
-        .success());
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
 
     let main = sb.path("proj/proj-main");
     let out = agentdock(&main, &sb.home(), &["worktree", "rm", "main"]);

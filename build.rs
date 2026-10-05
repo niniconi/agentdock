@@ -5,7 +5,7 @@
 // OUT_DIR for packaging to pick up; see the note on the install path below.
 
 use clap::{CommandFactory, ValueEnum};
-use clap_complete::{generate_to, Generator, Shell};
+use clap_complete::{Generator, Shell, generate_to};
 use std::env;
 use std::io::Error;
 

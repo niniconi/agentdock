@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::cli::ApplyArgs;
-use crate::config::{validate_port_mapping, AgentConfig, Config};
+use crate::config::{AgentConfig, Config, validate_port_mapping};
 use crate::container;
 use crate::state::StateManager;
 

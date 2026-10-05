@@ -1,13 +1,13 @@
 pub mod git;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::cli::{WorktreeAddArgs, WorktreeListArgs, WorktreeRmArgs};
-use crate::error::{format_conflicts, ContainerError, WorktreeError};
+use crate::error::{ContainerError, WorktreeError, format_conflicts};
 use crate::state::StateManager;
 
 const MARKER_FILE: &str = ".agentdock.json";
@@ -313,13 +313,13 @@ pub fn add(args: &WorktreeAddArgs) -> Result<()> {
     // branch that the main worktree is on fails with a confusing message about
     // an existing directory.
     let existing = git::worktree_list(&main)?;
-    if let Some(entry) = find_worktree(&existing, &main, &args.branch, Match::Strict) {
-        if entry.branch.is_some() {
-            bail!(WorktreeError::BranchInUse {
-                branch: args.branch.clone(),
-                path: entry.path,
-            });
-        }
+    if let Some(entry) = find_worktree(&existing, &main, &args.branch, Match::Strict)
+        && entry.branch.is_some()
+    {
+        bail!(WorktreeError::BranchInUse {
+            branch: args.branch.clone(),
+            path: entry.path,
+        });
     }
 
     let dir_name = format!("{}-{}", marker.repo, flatten(&args.branch));
@@ -328,13 +328,13 @@ pub fn add(args: &WorktreeAddArgs) -> Result<()> {
         // A detached worktree was named after its commit, so it can occupy a
         // path a new branch would want. Say so, rather than leaving the user
         // with a bare "directory already exists" and no hint why.
-        if let Some(entry) = find_worktree(&existing, &main, &args.branch, Match::Loose) {
-            if entry.branch.is_none() {
-                bail!(WorktreeError::NameTakenByDetached {
-                    name: args.branch.clone(),
-                    path: entry.path,
-                });
-            }
+        if let Some(entry) = find_worktree(&existing, &main, &args.branch, Match::Loose)
+            && entry.branch.is_none()
+        {
+            bail!(WorktreeError::NameTakenByDetached {
+                name: args.branch.clone(),
+                path: entry.path,
+            });
         }
         bail!(WorktreeError::TargetExists { path });
     }

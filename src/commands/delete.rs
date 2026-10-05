@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::cli::DeleteArgs;
 use crate::docker::{ContainerStatus, DockerClient};
