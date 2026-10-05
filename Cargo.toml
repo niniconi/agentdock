@@ -2,6 +2,12 @@
 name = "agentdock"
 version = "0.1.0"
 edition = "2021"
+repository = "https://github.com/niniconi/agentdock"
+description = "Docker-based AI Agent Manager. Manages persistent Docker containers for running AI agents."
+license = "MIT"
+readme = "README.md"
+keywords = ["docker", "ai", "agent", "cli", "worktree"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -16,3 +22,8 @@ thiserror = "2.0.21"
 [build-dependencies]
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4.6.11"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

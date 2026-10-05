@@ -1,0 +1,19 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "powershell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Attest that a binary came from this commit
+github-attestations = true
+# The attest step lands in the host job, where the artifacts are assembled, so
+# id-token: write has to be granted there too. Asking for it in announce left
+# the permission in one job and the step in another, and the run failed.
+github-attestations-phase = "host"

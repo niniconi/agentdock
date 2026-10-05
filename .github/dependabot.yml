@@ -1,0 +1,11 @@
+# Dependency updates for the Cargo workspace.
+#
+# The github-actions ecosystem is deliberately absent. `.github/workflows/release.yml`
+# is written by `dist generate`, which overwrites hand edits, so a bump applied
+# here would be lost the next time the config is regenerated.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
