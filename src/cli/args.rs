@@ -143,6 +143,14 @@ pub struct DeleteArgs {
     /// Also remove the Docker container (not just the record)
     #[arg(long)]
     pub force: bool,
+
+    /// Also delete the agent's persisted data under
+    /// ~/.local/share/agentdock/<name>
+    ///
+    /// Off by default: that data lives outside the container, so removing the
+    /// container does not remove it, and it is the only copy there is.
+    #[arg(long)]
+    pub purge: bool,
 }
 
 #[derive(Parser)]

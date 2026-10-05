@@ -184,6 +184,16 @@ fn assert_recorded(records: &str, image: &str, agent: &str) {
     );
 }
 
+/// The names in a records.json, which is `{"records": {}}` rather than empty
+/// text once the last one is removed.
+fn record_names(records: &str) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_str(records).expect("parse records");
+    v["records"]
+        .as_object()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 #[test]
 fn changing_image_recreates_the_container() {
     let mut sb = Sandbox::new("changeimage");
@@ -733,5 +743,89 @@ fn up_leaves_a_persisted_container_alone() {
     assert!(
         !log.contains("image inspect"),
         "up should not need the image config: {log}"
+    );
+}
+
+#[test]
+fn delete_keeps_persisted_data_by_default() {
+    let mut sb = Sandbox::new("purge-keep");
+    sb.run(&["apply", "-a", "nixos/opencode", "-n", "box", "--persist"]);
+
+    let out = sb.run(&["delete", "box", "--force"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // The data lives outside the container, so removing the container does not
+    // remove it, and it is the only copy there is.
+    assert!(
+        sb.persist_dir("box", "config").is_dir(),
+        "delete removed the data without being asked to: {stdout}"
+    );
+    assert!(
+        stdout.contains("Persisted data kept at"),
+        "the user should be told where it went: {stdout}"
+    );
+    assert!(
+        stdout.contains("rm -rf"),
+        "the user should be told how to remove it: {stdout}"
+    );
+}
+
+#[test]
+fn delete_purge_removes_persisted_data() {
+    let mut sb = Sandbox::new("purge-yes");
+    sb.run(&["apply", "-a", "nixos/opencode", "-n", "box", "--persist"]);
+
+    let out = sb.run(&["delete", "box", "--force", "--purge"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !sb.persist_dir("box", "config").exists(),
+        "--purge left the data behind: {stdout}"
+    );
+    assert!(
+        !sb.persist_dir("box", "data").exists(),
+        "--purge left the data behind: {stdout}"
+    );
+    assert_eq!(
+        record_names(&sb.records()),
+        Vec::<String>::new(),
+        "{}",
+        sb.records()
+    );
+    assert!(
+        sb.mount().exists(),
+        "--purge must not touch the workspace, only the agent's own data"
+    );
+}
+
+#[test]
+fn delete_purge_on_a_container_that_never_persisted_is_fine() {
+    let mut sb = Sandbox::new("purge-noop");
+    sb.run(&["apply", "-a", "nixos/bash", "-n", "box"]);
+
+    // Nothing to remove is the desired end state, so it is not an error.
+    let out = sb.run(&["delete", "box", "--force", "--purge"]);
+    assert!(
+        out.status.success(),
+        "--purge with nothing to purge should succeed: {out:?}"
+    );
+    assert_eq!(
+        record_names(&sb.records()),
+        Vec::<String>::new(),
+        "{}",
+        sb.records()
+    );
+}
+
+#[test]
+fn delete_without_purge_says_nothing_when_there_was_no_data() {
+    let mut sb = Sandbox::new("purge-quiet");
+    sb.run(&["apply", "-a", "nixos/bash", "-n", "box"]);
+
+    let out = sb.run(&["delete", "box", "--force"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("Persisted data kept at"),
+        "nothing was persisted, so nothing should be mentioned: {stdout}"
     );
 }

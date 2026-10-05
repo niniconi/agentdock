@@ -287,7 +287,7 @@ pub fn init() -> Result<()> {
     println!();
     println!("Next steps:");
     println!("  cd {}/{}", toplevel.display(), main_name);
-    println!("  agentdock worktree add <branch> --run   # spin up another agent");
+    println!("  agentdock worktree add <branch> --apply   # spin up another agent");
 
     Ok(())
 }
@@ -526,6 +526,14 @@ pub fn rm(args: &WorktreeRmArgs) -> Result<()> {
         state.remove(&name);
         state.save()?;
         println!("Removed container record: {}", name);
+        // Same reason delete does not: the data is outside the container, so
+        // this says where it is rather than removing it. Removing a worktree is
+        // already destructive to the checkout beside it.
+        if let Ok(dir) = crate::persist::container_data_dir(&name)
+            && dir.exists()
+        {
+            println!("  persisted data kept at: {}", dir.display());
+        }
     }
 
     git::worktree_remove(&main, &target.path, args.force)?;
