@@ -8,7 +8,7 @@ several agents can work in parallel.
 
 ## Project status
 
-Pre-release: `0.1.0`, untagged, no CI. Breaking changes are cheap here, so do not add upgrade
+Pre-release: `0.1.0`, untagged. Breaking changes are cheap here, so do not add upgrade
 shims or migration code for state an earlier build wrote, and do not keep a superseded field
 alive out of caution. Remove the old path rather than carrying it for someone who never
 shipped it.
@@ -40,7 +40,7 @@ cargo test                        # unit + integration
 cargo test --test worktree        # worktree integration suite only
 cargo test --test worktree <fn>   # a single test
 
-# gate (there is no CI, so these three stand in for it)
+# the gate, which ci.yml runs on every push
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
@@ -132,3 +132,14 @@ not have them, or it rejects valid branch names that merely resemble a detached 
   drops the source. The two invariants in `git.rs` (`Failed to determine the worktree root`,
   `Failed to determine the current branch`) are the deliberate exception and stay plain
   `bail!` strings.
+- `.github/workflows/release.yml` is written by `dist generate` and **must not be hand
+  edited**; a change there is lost the next time the config is regenerated. Change
+  `dist-workspace.toml` and re-run `dist generate` instead, then read the diff: dist does
+  not check that a combination of settings is coherent, so a wrong pairing is generated
+  confidently and only the CI run reports it. That is how `github-attestations-phase` once
+  granted `id-token: write` to one job while putting the attest step in another. The
+  release workflow also runs its plan step on pull requests, so a broken release
+  configuration should surface there rather than at the next tag.
+- Dependabot covers the `cargo` ecosystem only. `release.yml` is regenerated, so an
+  actions bump proposed there would be undone; `ci.yml` is hand written and could be
+  covered separately if its two actions ever need it.
