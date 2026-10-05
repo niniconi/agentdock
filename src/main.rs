@@ -8,6 +8,7 @@ mod container;
 mod docker;
 mod error;
 mod init;
+mod persist;
 mod state;
 mod worktree;
 

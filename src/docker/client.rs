@@ -1,10 +1,12 @@
 use anyhow::{Result, bail};
+use serde::Deserialize;
 use std::path::Path;
 use std::process::{Command, Output};
 
 use super::types::ContainerStatus;
 use crate::config::Config;
 use crate::error::ContainerError;
+use crate::persist::Mount;
 
 /// Run docker, reporting a missing binary separately from a command failure.
 ///
@@ -35,11 +37,12 @@ fn check(op: &'static str, output: &Output) -> Result<()> {
 pub struct DockerClient;
 
 impl DockerClient {
-    /// Create a container from `config`, serving `mount_path` at /workspace.
+    /// Create a container from `config`, serving `mount_path` at /workspace and
+    /// each of `mounts` where it says.
     ///
     /// The mount path is not part of the configuration: it locates the
     /// container, while the config describes how it is built.
-    pub fn run(name: &str, config: &Config, mount_path: &Path) -> Result<()> {
+    pub fn run(name: &str, config: &Config, mount_path: &Path, mounts: &[Mount]) -> Result<()> {
         let mut args = vec![
             "run".to_string(),
             "-d".to_string(),
@@ -51,6 +54,14 @@ impl DockerClient {
         let mount = format!("{}:/workspace", mount_path.display());
         args.push("-v".to_string());
         args.push(mount);
+
+        // Persisted agent directories, already resolved to absolute paths on
+        // both sides by the caller. Ordering is the caller's, so the command is
+        // reproducible for a given configuration.
+        for m in mounts {
+            args.push("-v".to_string());
+            args.push(format!("{}:{}", m.host.display(), m.container));
+        }
 
         // Mount host /dev/kvm for KVM virtualization
         if config.kvm {
@@ -142,5 +153,87 @@ impl DockerClient {
     pub fn destroy(name: &str) -> Result<()> {
         let output = docker(&["rm", "-f", name])?;
         check("remove container", &output)
+    }
+
+    /// The parts of an image's config that say which user it runs as.
+    ///
+    /// Read with a single `docker image inspect` rather than one call per field:
+    /// this is on the `apply` path and each call is a round trip to the daemon.
+    /// Pulling first mirrors what `docker run` would have done anyway, so an
+    /// image that is not present locally is still usable.
+    pub fn image_config(image: &str) -> Result<ImageConfig> {
+        match image_config_once(image) {
+            Ok(cfg) => Ok(cfg),
+            Err(first) => {
+                // `docker image inspect` fails for a missing image and for a
+                // daemon it cannot reach. Only the first is worth retrying, and
+                // only after pulling.
+                Self::pull(image)?;
+                image_config_once(image).map_err(|_| first)
+            }
+        }
+    }
+}
+
+/// One `docker image inspect -f '{{json .Config}}'`, with no pull attempted.
+fn image_config_once(image: &str) -> Result<ImageConfig> {
+    let output = docker(&["image", "inspect", "-f", "{{json .Config}}", image])?;
+
+    if !output.status.success() {
+        bail!(ContainerError::ImageInspectFailed {
+            image: image.to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+
+    // An empty body here means docker exited 0 without saying anything, which
+    // it does for an image it cannot resolve. Reporting that as the image's own
+    // failure keeps the message about the image rather than about JSON.
+    let raw = serde_json::from_slice::<ImageConfig>(&output.stdout).map_err(|_| {
+        anyhow::Error::new(ContainerError::ImageInspectFailed {
+            image: image.to_string(),
+            stderr: "docker reported no configuration for it".to_string(),
+        })
+    })?;
+
+    Ok(raw)
+}
+
+impl DockerClient {
+    fn pull(image: &str) -> Result<()> {
+        let output = docker(&["pull", image])?;
+        check("pull image", &output)
+    }
+}
+
+/// An image's `.Config`, as far as agentdock cares.
+///
+/// Every field is optional because an image is free to declare none of them:
+/// a `scratch`-based image in particular has no `User` and no `Env`, and an
+/// absent `User` is meaningful rather than missing, since docker then runs the
+/// container as root.
+#[derive(Deserialize)]
+pub struct ImageConfig {
+    user: Option<String>,
+    #[serde(default)]
+    env: Option<Vec<String>>,
+}
+
+impl ImageConfig {
+    /// The user the image runs as, or an empty string when it declares none.
+    ///
+    /// Absent is not the same as unset: docker runs a container as root when
+    /// the image names no user, so the caller needs to tell the two apart only
+    /// to know that root is the answer either way.
+    pub fn user(&self) -> &str {
+        self.user.as_deref().unwrap_or_default()
+    }
+
+    /// The `HOME` the image declares, if it declares one.
+    pub fn env_home(&self) -> Option<String> {
+        self.env
+            .as_ref()?
+            .iter()
+            .find_map(|entry| entry.strip_prefix("HOME=").map(str::to_string))
     }
 }

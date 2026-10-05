@@ -22,7 +22,7 @@ Suggested actions:
 
 Suggested actions:
   - agentdock worktree list
-  - agentdock worktree add <branch> --run"
+  - agentdock worktree add <branch> --apply"
     )]
     AlreadyConverted { path: PathBuf },
 
@@ -176,10 +176,14 @@ Possible causes:
   2. Docker environment was reset
 
 Suggested actions:
-  - agentdock apply -n {name}     # recreate it from its recorded settings
+  - agentdock apply -n {name} -a {image}/{agent}     # recreate it, repeating the flags you want
   - Or drop the record: agentdock delete {name}"
     )]
-    NotFound { name: String },
+    NotFound {
+        name: String,
+        image: String,
+        agent: String,
+    },
 
     #[error("Container '{name}' not found in managed records")]
     NotInRecords { name: String },
@@ -227,6 +231,32 @@ Suggested actions:
 
     #[error("Command execution failed, exit code: {code}")]
     ExecFailed { code: i32 },
+
+    #[error(
+        "Could not read the configuration of image '{image}': {stderr}
+
+--persist needs the image's default user to work out where its home directory
+is, and that comes from the image rather than from any flag.
+
+Possible causes:
+  1. The image is not present locally and could not be pulled
+  2. The docker daemon is not reachable
+
+Suggested actions:
+  - Check the image is usable: docker image inspect {image}
+  - Or apply without --persist, then mount the paths yourself with --init"
+    )]
+    ImageInspectFailed { image: String, stderr: String },
+
+    #[error(
+        "Cannot work out where to keep agentdock's own data.
+
+HOME is unset or relative, so there is no directory to create it under.
+
+Suggested actions:
+  - Set an absolute HOME, or set XDG_DATA_HOME to an absolute path"
+    )]
+    NoHome,
 }
 
 #[derive(Debug, thiserror::Error)]

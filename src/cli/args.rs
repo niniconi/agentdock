@@ -59,6 +59,24 @@ pub struct ApplyOpts {
     /// rather than merging into it.
     #[arg(short = 'P', long = "port", value_name = "HOST:CONTAINER")]
     pub port: Vec<String>,
+
+    /// Persist opencode's config and data directories under
+    /// ~/.local/share/agentdock/<container>/opencode/
+    ///
+    /// Bare --persist persists both. Name one to persist only that half:
+    /// --persist config, or --persist data. The container-side paths are
+    /// derived from the image's default user, not asked for.
+    ///
+    /// Omitted means nothing is persisted.
+    #[arg(
+        long,
+        value_name = "WHAT",
+        num_args = 0..=1,
+        value_delimiter = ',',
+        default_missing_value = "config,data",
+        value_parser = ["config", "data"],
+    )]
+    pub persist: Option<Vec<String>>,
 }
 
 #[derive(Parser)]

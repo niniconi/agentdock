@@ -27,27 +27,32 @@ pub struct AgentConfig {
 }
 
 impl AgentConfig {
+    /// Split `{docker_image}/{agent_name}` at the **last** slash.
+    ///
+    /// The last one, not the first, because an image reference carries slashes
+    /// of its own: `ghcr.io/owner/nixos/opencode` is one image and one agent,
+    /// and splitting at the first slash reads it as the image `ghcr.io`. That
+    /// matters beyond the image field, since `agent_name` is what gets handed to
+    /// `docker exec -it <name> sh -c <agent_name>`.
     pub fn parse(input: &str) -> Result<Self, String> {
-        if let Some(slash_pos) = input.find('/') {
-            let docker_image = input[..slash_pos].to_string();
-            let agent_name = input[slash_pos + 1..].to_string();
+        match input.rsplit_once('/') {
+            Some((docker_image, agent_name)) => {
+                if docker_image.is_empty() {
+                    return Err("Docker image name cannot be empty".to_string());
+                }
+                if agent_name.is_empty() {
+                    return Err("Agent name cannot be empty".to_string());
+                }
 
-            if docker_image.is_empty() {
-                return Err("Docker image name cannot be empty".to_string());
+                Ok(Self {
+                    docker_image: docker_image.to_string(),
+                    agent_name: agent_name.to_string(),
+                })
             }
-            if agent_name.is_empty() {
-                return Err("Agent name cannot be empty".to_string());
-            }
-
-            Ok(Self {
-                docker_image,
-                agent_name,
-            })
-        } else {
-            Err(format!(
+            None => Err(format!(
                 "Invalid format: '{}', expected {{docker_image}}/{{agent_name}}, e.g.: nixos:latest/opencode",
                 input
-            ))
+            )),
         }
     }
 }
@@ -68,6 +73,9 @@ pub struct Config {
     pub https_proxy: Option<String>,
     pub init_content: Option<String>,
     pub kvm: bool,
+    /// Which of opencode's directories to mount in, if any. `None` is the
+    /// flag being left out, which means nothing is persisted.
+    pub persist: Option<Vec<Persist>>,
 }
 
 impl Config {
@@ -80,6 +88,11 @@ impl Config {
             https_proxy: opts.https_proxy.clone(),
             init_content: None,
             kvm: opts.kvm,
+            persist: opts.persist.as_ref().map(|v| {
+                v.iter()
+                    .filter_map(|s| Persist::parse(s))
+                    .collect::<Vec<_>>()
+            }),
         }
     }
 
@@ -94,6 +107,10 @@ impl Config {
             https_proxy: record.https_proxy.clone(),
             init_content: record.init_content.clone(),
             kvm: record.kvm,
+            persist: record
+                .persist
+                .as_ref()
+                .map(|v| v.iter().filter_map(|s| Persist::parse(s)).collect()),
         }
     }
 
@@ -109,6 +126,34 @@ impl Config {
             docker_image: self.docker_image.clone(),
             agent_name: self.agent_name.clone(),
             kvm: self.kvm,
+            persist: self
+                .persist
+                .as_ref()
+                .map(|v| v.iter().map(|p| p.as_str().to_string()).collect()),
+        }
+    }
+}
+
+/// One of opencode's directories, as named on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Persist {
+    Config,
+    Data,
+}
+
+impl Persist {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "config" => Some(Self::Config),
+            "data" => Some(Self::Data),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Data => "data",
         }
     }
 }
@@ -137,5 +182,22 @@ mod tests {
     #[test]
     fn test_parse_empty_agent() {
         assert!(AgentConfig::parse("nixos:latest/").is_err());
+    }
+
+    #[test]
+    fn test_parse_keeps_registry_slashes_in_the_image() {
+        // An image reference has slashes of its own. Splitting at the first
+        // would call this image `ghcr.io` and hand `owner/nixos/opencode` to
+        // docker exec as the agent.
+        let config = AgentConfig::parse("ghcr.io/owner/nixos/opencode").unwrap();
+        assert_eq!(config.docker_image, "ghcr.io/owner/nixos");
+        assert_eq!(config.agent_name, "opencode");
+    }
+
+    #[test]
+    fn test_parse_keeps_a_port_in_the_registry() {
+        let config = AgentConfig::parse("localhost:5000/nixos/pi-agent").unwrap();
+        assert_eq!(config.docker_image, "localhost:5000/nixos");
+        assert_eq!(config.agent_name, "pi-agent");
     }
 }

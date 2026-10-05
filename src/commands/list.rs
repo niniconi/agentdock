@@ -39,6 +39,7 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
                     .https_proxy
                     .clone()
                     .unwrap_or_else(|| "-".to_string()),
+                persisted(name, record),
             ]);
         } else {
             rows.push(vec![
@@ -69,6 +70,7 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
                 "CREATED",
                 "HTTP_PROXY",
                 "HTTPS_PROXY",
+                "PERSISTED",
             ],
             &rows,
         );
@@ -77,6 +79,29 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// What `agentdock list -v` reports for a record's persisted directories.
+///
+/// Relative to the container's base directory rather than absolute, because
+/// there is one per supported agent and a repeated prefix would stretch the
+/// table past the terminal. The base is what `--purge` removes, so it is printed
+/// once under the table.
+///
+/// The container-side paths are not stored, because they are derived from the
+/// image when `apply` runs and would go stale the moment the image changed. What
+/// is listed does exist on the host and can be checked.
+fn persisted(name: &str, record: &crate::state::Record) -> String {
+    // The record holds the names the flag took, which is what `Config::of`
+    // turns back into `Persist` for the rest of the code.
+    let Some(config) = crate::config::Config::of(record)
+        .persist
+        .filter(|k| !k.is_empty())
+    else {
+        return "-".to_string();
+    };
+
+    crate::persist::container_data_dirs(name, &config).join(" ")
 }
 
 pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {

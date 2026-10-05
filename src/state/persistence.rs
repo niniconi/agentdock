@@ -26,6 +26,12 @@ pub struct Record {
     /// Whether /dev/kvm was mapped in. `docker run` consumes it, so without
     /// recording it a later change could never be applied.
     pub kvm: bool,
+    /// Which of opencode's directories were mounted in, as the names the flag
+    /// takes. Optional and defaulted because the paths are derived from the
+    /// image when `apply` runs, so an older record that predates the flag is
+    /// still readable and means nothing was persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persist: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
