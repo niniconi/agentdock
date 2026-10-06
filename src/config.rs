@@ -20,6 +20,21 @@ pub fn validate_port_mapping(port: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate KEY=VALUE format for a container environment variable.
+pub fn validate_env(env: &str) -> Result<(), String> {
+    match env.split_once('=') {
+        Some((key, _)) if !key.is_empty() && !key.chars().any(char::is_whitespace) => Ok(()),
+        Some(_) => Err(format!(
+            "Invalid environment variable '{}': key cannot be empty or contain whitespace",
+            env
+        )),
+        None => Err(format!(
+            "Invalid environment variable '{}'. Expected KEY=VALUE",
+            env
+        )),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     pub docker_image: String,
@@ -76,6 +91,9 @@ pub struct Config {
     /// Which of opencode's directories to mount in, if any. `None` is the
     /// flag being left out, which means nothing is persisted.
     pub persist: Option<Vec<Persist>>,
+    /// Environment variables passed to the container as `-e KEY=VALUE`.
+    /// Always a list. An empty one means none are set.
+    pub envs: Vec<String>,
 }
 
 impl Config {
@@ -89,6 +107,7 @@ impl Config {
             init_content: None,
             kvm: opts.kvm,
             persist: opts.persist.as_deref().map(parse_persist),
+            envs: opts.env.clone(),
         }
     }
 
@@ -104,6 +123,7 @@ impl Config {
             init_content: record.init_content.clone(),
             kvm: record.kvm,
             persist: record.persist.as_deref().map(parse_persist),
+            envs: record.envs.clone().unwrap_or_default(),
         }
     }
 
@@ -119,6 +139,7 @@ impl Config {
             docker_image: self.docker_image.clone(),
             agent_name: self.agent_name.clone(),
             kvm: self.kvm,
+            envs: (!self.envs.is_empty()).then(|| self.envs.clone()),
             persist: self
                 .persist
                 .as_ref()

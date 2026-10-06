@@ -83,6 +83,12 @@ impl DockerClient {
             args.push(format!("https_proxy={}", proxy));
         }
 
+        // User-supplied environment variables
+        for env in &config.envs {
+            args.push("-e".to_string());
+            args.push(env.clone());
+        }
+
         // Port mappings
         for port in &config.ports {
             args.push("-p".to_string());

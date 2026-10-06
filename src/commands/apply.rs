@@ -12,6 +12,9 @@ pub fn execute_apply(args: ApplyArgs) -> Result<()> {
     for port in &args.opts.port {
         validate_port_mapping(port).map_err(|e| anyhow::anyhow!(e))?;
     }
+    for env in &args.opts.env {
+        crate::config::validate_env(env).map_err(|e| anyhow::anyhow!(e))?;
+    }
 
     // The configuration comes from the flags alone. A container found here is
     // replaced rather than merged into, so anything left out is turned off.

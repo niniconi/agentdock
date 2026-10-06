@@ -60,6 +60,11 @@ pub struct ApplyOpts {
     #[arg(short = 'P', long = "port", value_name = "HOST:CONTAINER")]
     pub port: Vec<String>,
 
+    /// Environment variable for the container (e.g., KEY=VALUE). Can be
+    /// specified multiple times.
+    #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
+    pub env: Vec<String>,
+
     /// Persist opencode's config and data directories under
     /// ~/.local/share/agentdock/<container>/opencode/
     ///

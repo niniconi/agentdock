@@ -19,6 +19,9 @@ pub struct Record {
     pub https_proxy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub ports: Option<Vec<String>>,
+    /// Environment variables the container was created with, as KEY=VALUE.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub envs: Option<Vec<String>>,
     /// Image the container was created from.
     pub docker_image: String,
     /// Agent executable passed to `docker exec`.
