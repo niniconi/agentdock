@@ -89,6 +89,16 @@ impl DockerClient {
             args.push(env.clone());
         }
 
+        // Resource limits
+        if let Some(memory) = &config.memory {
+            args.push("--memory".to_string());
+            args.push(memory.clone());
+        }
+        if let Some(cpus) = &config.cpus {
+            args.push("--cpus".to_string());
+            args.push(cpus.clone());
+        }
+
         // Port mappings
         for port in &config.ports {
             args.push("-p".to_string());

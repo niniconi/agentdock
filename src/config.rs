@@ -58,6 +58,40 @@ pub fn validate_port_mapping(port: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Validate a docker --memory value: a number followed by b/k/m/g/t
+/// (case-insensitive), or a plain byte count.
+pub fn validate_memory(memory: &str) -> Result<(), String> {
+    let (digits, unit) = match memory.chars().position(|c| c.is_ascii_alphabetic()) {
+        Some(i) => memory.split_at(i),
+        None => (memory, ""),
+    };
+    let valid = !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && matches!(
+            unit.to_ascii_lowercase().as_str(),
+            "" | "b" | "k" | "m" | "g" | "t"
+        );
+    if valid {
+        Ok(())
+    } else {
+        Err(format!(
+            "Invalid memory limit '{}'. Expected e.g. 512m, 2g, or a byte count",
+            memory
+        ))
+    }
+}
+
+/// Validate a docker --cpus value: a positive number.
+pub fn validate_cpus(cpus: &str) -> Result<(), String> {
+    match cpus.parse::<f64>() {
+        Ok(n) if n > 0.0 => Ok(()),
+        _ => Err(format!(
+            "Invalid CPU limit '{}'. Expected a positive number, e.g. 0.5 or 2",
+            cpus
+        )),
+    }
+}
+
 /// Validate KEY=VALUE format for a container environment variable.
 pub fn validate_env(env: &str) -> Result<(), String> {
     match env.split_once('=') {
@@ -132,6 +166,8 @@ pub struct Config {
     /// Environment variables passed to the container as `-e KEY=VALUE`.
     /// Always a list. An empty one means none are set.
     pub envs: Vec<String>,
+    pub memory: Option<String>,
+    pub cpus: Option<String>,
 }
 
 impl Config {
@@ -145,6 +181,8 @@ impl Config {
             init_content: None,
             kvm: opts.kvm,
             persist: opts.persist.as_deref().map(parse_persist),
+            memory: opts.memory.clone(),
+            cpus: opts.cpus.clone(),
             envs: match &opts.env_file {
                 Some(path) => {
                     let from_file = parse_env_file(path).map_err(|e| anyhow::anyhow!(e))?;
@@ -167,6 +205,8 @@ impl Config {
             init_content: record.init_content.clone(),
             kvm: record.kvm,
             persist: record.persist.as_deref().map(parse_persist),
+            memory: record.memory.clone(),
+            cpus: record.cpus.clone(),
             envs: record.envs.clone().unwrap_or_default(),
         }
     }
@@ -183,6 +223,8 @@ impl Config {
             docker_image: self.docker_image.clone(),
             agent_name: self.agent_name.clone(),
             kvm: self.kvm,
+            memory: self.memory.clone(),
+            cpus: self.cpus.clone(),
             envs: (!self.envs.is_empty()).then(|| self.envs.clone()),
             persist: self
                 .persist

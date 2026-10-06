@@ -15,6 +15,12 @@ pub fn execute_apply(args: ApplyArgs) -> Result<()> {
     for env in &args.opts.env {
         crate::config::validate_env(env).map_err(|e| anyhow::anyhow!(e))?;
     }
+    if let Some(memory) = &args.opts.memory {
+        crate::config::validate_memory(memory).map_err(|e| anyhow::anyhow!(e))?;
+    }
+    if let Some(cpus) = &args.opts.cpus {
+        crate::config::validate_cpus(cpus).map_err(|e| anyhow::anyhow!(e))?;
+    }
 
     // The configuration comes from the flags alone. A container found here is
     // replaced rather than merged into, so anything left out is turned off.

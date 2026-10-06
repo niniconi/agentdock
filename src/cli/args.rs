@@ -11,7 +11,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Create a container, or change an existing one to match the given settings
-    Apply(ApplyArgs),
+    Apply(Box<ApplyArgs>),
     /// Start an existing container without changing how it was built
     Up(UpArgs),
     /// List all managed containers
@@ -71,6 +71,14 @@ pub struct ApplyOpts {
     /// Values from -e/--env override the same key from this file.
     #[arg(long, value_name = "PATH")]
     pub env_file: Option<PathBuf>,
+
+    /// Limit container memory (e.g., 512m, 2g)
+    #[arg(long, value_name = "SIZE")]
+    pub memory: Option<String>,
+
+    /// Limit container CPU count (e.g., 0.5, 2)
+    #[arg(long, value_name = "N")]
+    pub cpus: Option<String>,
 
     /// Persist opencode's config and data directories under
     /// ~/.local/share/agentdock/<container>/opencode/

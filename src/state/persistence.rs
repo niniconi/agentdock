@@ -22,6 +22,12 @@ pub struct Record {
     /// Environment variables the container was created with, as KEY=VALUE.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub envs: Option<Vec<String>>,
+    /// Memory limit the container was created with, e.g. "2g".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub memory: Option<String>,
+    /// CPU limit the container was created with, e.g. "1.5".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cpus: Option<String>,
     /// Image the container was created from.
     pub docker_image: String,
     /// Agent executable passed to `docker exec`.

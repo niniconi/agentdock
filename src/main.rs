@@ -18,7 +18,7 @@ fn main() -> Result<()> {
     let cli = cli::Cli::parse();
 
     match cli.command {
-        Commands::Apply(args) => commands::execute_apply(args),
+        Commands::Apply(args) => commands::execute_apply(*args),
         Commands::Up(args) => commands::execute_up(args),
         Commands::List(args) => commands::execute_list(args),
         Commands::Delete(args) => commands::execute_delete(args),
