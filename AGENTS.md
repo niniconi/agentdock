@@ -71,6 +71,12 @@ relocates real directories while doing so. Read it before touching that area.
 executed. On a machine without git, all 16 tests report `ok` in about 0.01s having run
 nothing. Do not treat a green suite as proof of anything on such a machine.
 
+`tests/docker_real.rs` is the same shape, pointed at the daemon instead of git: it drives
+the real binary through real containers (local: skips cleanly when no daemon). `tests/record_image.rs` keeps the stub `docker` and remains the place to
+assert exact command sequences. The stub's own assumptions about the daemon (inspect key
+spellings, config keys) are only checkable through `docker_real.rs`, so a change to
+`src/docker/` that touches the daemon interface belongs in both.
+
 ## Architecture
 
 Single crate, binary-only (no lib target), so `pub` on items in `src/` does not mean public
