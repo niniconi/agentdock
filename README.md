@@ -1,5 +1,7 @@
 # AgentDock
 
+English | [简体中文](README.zh-CN.md)
+
 Docker-based AI Agent Manager. Manages persistent Docker containers for running AI agents.
 
 ## Usage
