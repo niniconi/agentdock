@@ -28,13 +28,12 @@ container to match.
 ```bash
 agentdock apply -a nixos/opencode -P 8080:80
 agentdock apply -n box -P 9090:80      # change the published port
-agentdock apply -n box --force         # recreate even if nothing changed
 ```
 
-A flag you leave out keeps whatever the container already has, so repeating an
-apply with fewer flags never strips a setting. `apply` refuses to recreate a
-container that already matches the request, because that would discard whatever
-is inside it for no reason; `--force` asks for it anyway.
+A flag you leave out is a flag that is off. `apply` replaces the configuration
+rather than merging into it, which matches `docker run`: the container is built
+from the arguments it was given and nothing else. So repeating an apply with
+fewer flags does strip a setting, and the flags have to be repeated to keep it.
 
 `up` starts a container and takes no configuration flags, so nothing passed to
 it can change how the container was built:
@@ -46,6 +45,63 @@ agentdock up               # the container serving this directory
 
 It does not create containers. Where there is nothing to start it says so and
 points at `apply`.
+
+### Persisting an agent's own data
+
+The workspace mount is the only thing a container gets, so an agent's config and
+history live inside the container and go when it is rebuilt. `--persist` mounts
+them from the host instead:
+
+```bash
+agentdock apply -a nixos/opencode --persist              # config and data
+agentdock apply -a nixos/opencode --persist config       # config only
+agentdock apply -a nixos/opencode --persist data         # data only
+agentdock apply -a nixos/bash     --persist              # same data, other entry point
+```
+
+You do not say where. They land under
+`$XDG_DATA_HOME/agentdock/<container>/<agent>/<what>` — `~/.local/share` unless
+you have set that — one directory per container, so two agents on two branches
+never write the same database:
+
+```
+~/.local/share/agentdock/
+  box/
+    opencode/
+      config/
+      data/
+```
+
+Every directory agentdock knows about is mounted for every container, whichever
+agent `-a` names. That flag picks the entry point rather than the owner: a
+container entered with `bash` is one whose agent you have not started yet, so
+mounting for `opencode` regardless is what lets you look inside it and find the
+data still there. Adding an agent means one line in `src/persist.rs` per
+directory it keeps.
+
+Inside the container the paths follow from the image, since agentdock has to
+name an absolute path and only the image knows which user it runs as. An image
+with no `USER` runs as root, so its home is `/root`; otherwise the `HOME` the
+image declares is used. A named user with no `HOME` declared is the case left,
+where agentdock assumes `/home/<user>` and says so.
+
+`agentdock list -v` shows which directories each container persists, as paths
+under `~/.local/share/agentdock/` — the same directory `--purge` removes, one
+level up from the container name in each row. Being off by default is
+deliberate: `apply` builds from the flags it is given, so a flag that turned
+itself on would be the one flag whose absence did not mean absence.
+
+Removing a container leaves that directory alone, since it is outside the
+container and `delete` says where it went:
+
+```bash
+agentdock delete box --force          # keeps the data, and says where
+agentdock delete box --force --purge  # removes it too
+```
+
+`--purge` is never the default. That data is the only copy of your credentials
+and conversation history, so erasing it is a separate decision from removing a
+container.
 
 ## Worktrees
 
@@ -81,9 +137,9 @@ directory. A detached worktree has no branch, so `worktree list` shows its short
 commit id in the `BRANCH` column, and that is what `worktree rm` accepts:
 
 ```
-ROLE      BRANCH  PATH                 HEAD
-main      main    myproject-main       8f2a1c4
-worktree  8f2a1c4  myproject-8f2a1c4   8f2a1c4
+ROLE      BRANCH     PATH                  HEAD      CONTAINER
+main      main       myproject-main        8f2a1c4   -
+worktree  8f2a1c4   myproject-8f2a1c4    8f2a1c4   -
 ```
 
 Because a detached worktree is named after its short commit id, that name

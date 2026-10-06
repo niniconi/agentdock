@@ -21,7 +21,10 @@ earlier version:
   not, so adding one makes an older file fail to parse and takes `list`, `status` and `delete`
   down together. That is an accepted outcome, not something to code around. `kvm` is a
   required field, added because `docker run` consumes it and without recording it a later
-  change could never be applied.
+  change could never be applied. `persist` is the opposite case: it is `Option<Vec<String>>`
+  even though `docker run` consumes it too, because its container-side paths are **derived
+  from the image** when `apply` runs rather than stored, so there is nothing an older record
+  would be missing.
 - **`.agentdock.json`.** Unlike records, this one marks a project whose directory `worktree
   init` has already **renamed**. `MARKER_VERSION` is written but `read_marker` never compares
   it, so a marker with any value deserializes. A change to how worktrees are laid out or
@@ -77,18 +80,36 @@ API. Most are `pub` only to cross module boundaries.
 - `src/commands/` is one file per subcommand, each exposing `execute_*`. This is the
   established pattern, so add new subcommands here.
 - `src/cli/args.rs` holds every clap struct. `ApplyOpts` is flattened into both `ApplyArgs` and
-  `WorktreeAddArgs` so the two share container flags. Its `agent` and `port` are `Option`
-  because a clap default applies to every call, not just the one creating a container, and a
-  bare `Vec` cannot tell an omitted flag from a cleared one.
+  `WorktreeAddArgs` so the two share container flags. Its `agent` is a plain `String` carrying a
+  clap `default_value`, which applies to every call rather than only the one creating a container,
+  and its `port` is a `Vec` so that an omitted flag and a cleared one are the same empty list —
+  both mean "none", since `apply` replaces rather than merges.
 - `Config` in `src/config.rs` is what a container should be built like, with every field
-  carrying a value. `Config::resolve` merges the command line onto a record and `Config::of`
-  reads one back, so whether a rebuild is needed is a single `==` rather than a list of
-  per-field comparisons to keep in step with the write-back. `up` carries no configuration
-  flags by design, which is what keeps a bare `up` from rebuilding anything.
+  carrying a value. `Config::new` builds one from the command line alone, `Config::of` reads one
+  back from a record and `Config::to_record` writes it. There is deliberately **no** `PartialEq`
+  on it and nothing compares a config against a record: the flags are the only source of the
+  configuration, so a comparison would have nothing to decide. `apply` always rebuilds for that
+  reason, and `up` carries no configuration flags, which is what keeps a bare `up` from
+  rebuilding anything.
 - `src/docker/client.rs` shells out to `docker`. Note the one exception: `exec` runs
   `docker exec -it <name> sh -c <command>`, and `container.rs` passes the agent name from
   `-a {image}/{agent_name}` into that shell, so a crafted agent name is interpreted by the
   container's shell. This is pre-existing; do not introduce anything like it.
+- `src/persist.rs` decides where `--persist` mounts from. Two halves that must not drift: the
+  host side is `<XDG_DATA_HOME|~/.local/share>/agentdock/<container>/<agent>/<what>`. Four
+  readers reach it through `container_data_dir` rather than rebuilding it — `delete` for both
+  the report and `--purge`, `list -v`, and `worktree rm` naming what it kept — while
+  `plan_mounts` composes the same base out of `container_data_dir` too, so the two cannot
+  drift. `container_data_dirs` lists the same layout one entry per supported agent, relative to
+  that base, because `list -v` prints one column and a repeated absolute path per agent would
+  stretch it past the terminal.
+  The container side comes from `DockerClient::image_config`, which is `docker image inspect`
+  with a pull retry — deliberately **not** `exec`, since `exec` is `docker exec -it` and needs a
+  TTY. `SUPPORTED` is a list of agents and their directories with **no lookup** on the image or
+  on the agent named in `-a`: every entry is mounted for every container. Keying on the image
+  put `nixos`, `nixos:latest` and `ghcr.io/owner/nixos` in separate arms, so pinning a tag meant
+  editing the table; and keying on `-a` would refuse persistence to a container entered with
+  `bash`, which is one whose agent has not been started yet.
 - `src/worktree/` is the `worktree` subcommand, where `git.rs` is a thin `git` CLI wrapper and
   `mod.rs` holds orchestration.
 - `src/state/persistence.rs` reads and writes `~/.config/agentdock/records.json`. Both
