@@ -83,10 +83,10 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
 
 /// What `agentdock list -v` reports for a record's persisted directories.
 ///
-/// Relative to the container's base directory rather than absolute, because
-/// there is one per supported agent and a repeated prefix would stretch the
-/// table past the terminal. The base is what `--purge` removes, so it is printed
-/// once under the table.
+/// Relative to `<XDG_DATA_HOME|~/.local/share>/agentdock/` rather than absolute,
+/// because the prefix is the same on every row and repeating it would stretch
+/// the table past the terminal. So a row reads `box/opencode/config` and the
+/// prefix is the directory `--purge` removes, one level up from `box`.
 ///
 /// The container-side paths are not stored, because they are derived from the
 /// image when `apply` runs and would go stale the moment the image changed. What

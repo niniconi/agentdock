@@ -96,16 +96,23 @@ API. Most are `pub` only to cross module boundaries.
   `-a {image}/{agent_name}` into that shell, so a crafted agent name is interpreted by the
   container's shell. This is pre-existing; do not introduce anything like it.
 - `src/persist.rs` decides where `--persist` mounts from. Two halves that must not drift: the
-  host side is `<XDG_DATA_HOME|~/.local/share>/agentdock/<container>/<agent>/<what>`. Four
-  readers reach it through `container_data_dir` rather than rebuilding it — `delete` for both
-  the report and `--purge`, `list -v`, and `worktree rm` naming what it kept — while
-  `plan_mounts` composes the same base out of `container_data_dir` too, so the two cannot
-  drift. `container_data_dirs` lists the same layout one entry per supported agent, relative to
-  that base, because `list -v` prints one column and a repeated absolute path per agent would
-  stretch it past the terminal.
+  host side is `<XDG_DATA_HOME|~/.local/share>/agentdock/<container>/<agent>/<what>`. Three
+  readers reach it through `container_data_dir` rather than rebuilding it — `plan_mounts`,
+  `delete` for both the report and `--purge`, and `worktree rm` naming what it kept —
+  while `container_data_dirs` lists the same layout one entry per (agent, kind), relative to
+  the data home rather than to a container's own directory, for `list -v`, which prints one
+  column and would be stretched by a repeated absolute path on every row. `container_data_dir`
+  rejects a name that is not a single path segment: `PathBuf::join` resolves `..` and lets an
+  absolute component replace the base, which would turn `--purge` into a recursive delete of a
+  directory agentdock did not create. The name comes from `delete`'s positional argument, from
+  `-n`, from a UUID, or from `records.json` — and that last is a plain user-owned file.
   The container side comes from `DockerClient::image_config`, which is `docker image inspect`
   with a pull retry — deliberately **not** `exec`, since `exec` is `docker exec -it` and needs a
-  TTY. `SUPPORTED` is a list of agents and their directories with **no lookup** on the image or
+  TTY. Its `#[serde(rename_all = "PascalCase")]` is load-bearing: `{{json .Config}}` prints a Go
+  struct, so the keys are `User` and `Env`, and serde matches field names exactly while ignoring
+  keys it does not recognise. Without the rename every field deserializes as `None` for every
+  real image, and a `USER=node` image is then indistinguishable from one declaring nothing.
+  `SUPPORTED` is a list of agents and their directories with **no lookup** on the image or
   on the agent named in `-a`: every entry is mounted for every container. Keying on the image
   put `nixos`, `nixos:latest` and `ghcr.io/owner/nixos` in separate arms, so pinning a tag meant
   editing the table; and keying on `-a` would refuse persistence to a container entered with

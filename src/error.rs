@@ -249,6 +249,19 @@ Suggested actions:
     ImageInspectFailed { image: String, stderr: String },
 
     #[error(
+        "'{name}' cannot be used as a container name
+
+agentdock keeps each container's data one level under its own directory, and a
+name like '..' or '/somewhere/else' would point somewhere else entirely — a
+'..' would reach the directory holding every container's data.
+
+Suggested actions:
+  - Use a plain name, such as a branch name
+  - Or let agentdock pick one by leaving -n out"
+    )]
+    UnsafeContainerName { name: String },
+
+    #[error(
         "Cannot work out where to keep agentdock's own data.
 
 HOME is unset or relative, so there is no directory to create it under.

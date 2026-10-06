@@ -88,11 +88,7 @@ impl Config {
             https_proxy: opts.https_proxy.clone(),
             init_content: None,
             kvm: opts.kvm,
-            persist: opts.persist.as_ref().map(|v| {
-                v.iter()
-                    .filter_map(|s| Persist::parse(s))
-                    .collect::<Vec<_>>()
-            }),
+            persist: opts.persist.as_deref().map(parse_persist),
         }
     }
 
@@ -107,10 +103,7 @@ impl Config {
             https_proxy: record.https_proxy.clone(),
             init_content: record.init_content.clone(),
             kvm: record.kvm,
-            persist: record
-                .persist
-                .as_ref()
-                .map(|v| v.iter().filter_map(|s| Persist::parse(s)).collect()),
+            persist: record.persist.as_deref().map(parse_persist),
         }
     }
 
@@ -134,7 +127,25 @@ impl Config {
     }
 }
 
-/// One of opencode's directories, as named on the command line.
+/// The directories named by `--persist`, in the order first named.
+///
+/// clap lets the flag repeat and accumulate, so `--persist config --persist
+/// data` and `--persist config,config` both arrive as two entries. Deduped here
+/// rather than rejected: the outcome is the one the user meant either way, and
+/// what reaches the record is a set.
+fn parse_persist(names: &[String]) -> Vec<Persist> {
+    let mut out: Vec<Persist> = Vec::new();
+    for name in names {
+        if let Some(kind) = Persist::parse(name)
+            && !out.contains(&kind)
+        {
+            out.push(kind);
+        }
+    }
+    out
+}
+
+/// One of an agent's directories, as named on the command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Persist {
     Config,

@@ -570,7 +570,7 @@ fn persist_uses_the_images_declared_home() {
     let mut sb = Sandbox::new("persist-home");
     // A non-root image that declares where its home is. The username alone does
     // not give the path, so the image has to say it.
-    sb.set_image_config(r#"{"user":"node","env":["PATH=/usr/bin","HOME=/home/node"]}"#);
+    sb.set_image_config(r#"{"User":"node","Env":["PATH=/usr/bin","HOME=/home/node"]}"#);
     sb.run(&["apply", "-a", "nixos/opencode", "-n", "box", "--persist"]);
 
     let log = sb.log();
@@ -582,12 +582,11 @@ fn persist_uses_the_images_declared_home() {
 }
 
 #[test]
-fn the_image_decides_where_persistence_goes_not_the_agent() {
-    let mut sb = Sandbox::new("persist-byimage");
+fn the_agent_in_a_does_not_decide_where_persistence_goes() {
+    let mut sb = Sandbox::new("persist-byagent");
     // Entering the same image with bash is how you look around inside a
-    // container whose agent you have not started yet. Keying the table on the
-    // agent named here would refuse it, and with it the container that most
-    // needs its data kept.
+    // container whose agent you have not started yet. Persistence follows
+    // neither the entry point nor the image, so this container keeps its data.
     let out = sb.run(&["apply", "-a", "nixos/bash", "-n", "box", "--persist"]);
 
     assert!(out.status.success(), "bash should be persistable: {out:?}");
@@ -605,8 +604,8 @@ fn two_entry_points_share_one_directory() {
     let mut sb = Sandbox::new("persist-shared");
     sb.run(&["apply", "-a", "nixos/opencode", "-n", "box", "--persist"]);
 
-    // The point of keying on the image: the same container entered differently
-    // must not look like a different set of data.
+    // The same container entered differently must not look like a
+    // different set of data: the entry point is not an owner.
     sb.reset_log();
     sb.run(&["apply", "-a", "nixos/bash", "-n", "box", "--persist"]);
 
@@ -707,9 +706,11 @@ fn persist_is_recorded_so_list_can_show_it() {
 #[test]
 fn a_missing_image_reports_the_pull_failure() {
     let mut sb = Sandbox::new("persist-nopull");
-    // No image on the stub, and `pull` refuses, so the retry gives up. The
-    // message has to be about the image rather than about persistence, or the
-    // user goes looking in the wrong place.
+    // The stub reports no image, so the first inspect fails and the retry runs.
+    // The stub's last arm exits 0 for anything it does not handle, so `pull`
+    // succeeds and the second inspect fails too — which is the path that
+    // re-reports the first error. The message has to be about the image rather
+    // than about persistence, or the user goes looking in the wrong place.
     std::fs::remove_file(sb.root.join("image_env")).expect("remove image env");
 
     let out = sb.run(&["apply", "-a", "absent/opencode", "-n", "box", "--persist"]);
@@ -827,5 +828,102 @@ fn delete_without_purge_says_nothing_when_there_was_no_data() {
     assert!(
         !stdout.contains("Persisted data kept at"),
         "nothing was persisted, so nothing should be mentioned: {stdout}"
+    );
+}
+
+#[test]
+fn a_container_name_cannot_escape_the_data_directory() {
+    let mut sb = Sandbox::new("unsafe-name");
+    // `--purge` is a recursive delete, and `records.json` is a plain user-owned
+    // file a script or a merge could have edited. `PathBuf::join` resolves `..`
+    // and lets an absolute component replace the base, so without a check these
+    // would delete a directory agentdock never created — here, the data of
+    // every other container.
+    let victim = sb.root.join("outside");
+    std::fs::create_dir_all(&victim).expect("victim");
+    std::fs::write(victim.join("notes.txt"), "not agentdock's").expect("seed");
+
+    for name in ["..", "../outside", &victim.display().to_string()] {
+        let body = format!(
+            r#"{{"records":{{"{name}":{{"path":"{mnt}","created_at":"2026-01-01T00:00:00+00:00","docker_image":"img","agent_name":"opencode","kvm":false}}}}}}"#,
+            name = name,
+            mnt = sb.mount().display()
+        );
+        sb.write_records(&body);
+
+        let out = sb.run(&["delete", name, "--force", "--purge"]);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+
+        assert!(
+            stderr.contains("cannot be used as a container name"),
+            "{name} should be refused, got: {out:?}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&out.stdout).contains("Purged"),
+            "{name} must not report a purge it did not do"
+        );
+    }
+
+    assert!(victim.join("notes.txt").exists(), "the victim was deleted");
+}
+
+#[test]
+fn apply_also_refuses_a_name_that_would_escape() {
+    let mut sb = Sandbox::new("unsafe-apply");
+    // Same check, reached through `apply`. The directory is created before
+    // docker runs, so without this an unusable name would leave directories
+    // outside the base that `delete` could not then clean up.
+    let out = sb.run(&["apply", "-a", "img/opencode", "-n", "../evil", "--persist"]);
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("cannot be used as a container name"),
+        "apply should refuse it: {out:?}"
+    );
+    assert!(
+        !sb.root.join("home/.local/share/evil").exists(),
+        "a directory was created outside the base"
+    );
+}
+
+#[test]
+fn a_user_with_a_group_is_still_root() {
+    let mut sb = Sandbox::new("persist-usergroup");
+    // `USER root:root` is a routine Dockerfile line and docker passes it
+    // through verbatim. Read whole, `root:root` is not `root`, so the mount
+    // would go to /home/root:root, a directory nothing writes to.
+    sb.set_image_config(r#"{"User":"root:root","Env":["PATH=/usr/bin"]}"#);
+    sb.run(&["apply", "-a", "img/opencode", "-n", "box", "--persist"]);
+
+    let log = sb.log();
+    let cfg = sb.persist_dir("box", "config");
+    assert!(
+        log.contains(&format!("-v {}:/root/.config/opencode", cfg.display())),
+        "root:root should be root, got: {log}"
+    );
+}
+
+#[test]
+fn persist_repeats_do_not_accumulate() {
+    let mut sb = Sandbox::new("persist-repeat");
+    // clap lets the flag repeat and append, so this arrives as two entries.
+    // The outcome the user meant is the same either way; what reaches the
+    // record should not be a list with the same thing in it twice.
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/opencode",
+        "-n",
+        "box",
+        "--persist",
+        "config,config",
+    ]);
+
+    let records: serde_json::Value = serde_json::from_str(&sb.records()).expect("parse");
+    assert_eq!(
+        records["records"]["box"]["persist"],
+        serde_json::json!(["config"]),
+        "{}",
+        sb.records()
     );
 }

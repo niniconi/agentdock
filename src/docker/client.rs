@@ -208,11 +208,19 @@ impl DockerClient {
 
 /// An image's `.Config`, as far as agentdock cares.
 ///
+/// The rename is not optional. `docker image inspect -f '{{json .Config}}'`
+/// serializes a Go struct, so the keys are its **field names**: `User`, `Env`.
+/// Serde matches field names exactly, and it ignores keys it does not recognise
+/// rather than failing, so without this every field would deserialize as `None`
+/// for every real image — an image declaring `USER=node HOME=/home/node` would
+/// look the same as one declaring nothing, and both would be taken as root.
+///
 /// Every field is optional because an image is free to declare none of them:
 /// a `scratch`-based image in particular has no `User` and no `Env`, and an
 /// absent `User` is meaningful rather than missing, since docker then runs the
 /// container as root.
 #[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct ImageConfig {
     user: Option<String>,
     #[serde(default)]
@@ -235,5 +243,41 @@ impl ImageConfig {
             .as_ref()?
             .iter()
             .find_map(|entry| entry.strip_prefix("HOME=").map(str::to_string))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The keys are a Go struct's field names, so a lowercase fixture would
+    /// deserialize as an image that declares nothing at all — silently, because
+    /// serde ignores keys it does not recognise. Every fixture here is therefore
+    /// spelled the way `docker image inspect -f '{{json .Config}}'` prints it.
+    const REAL: &str = r#"{"User":"node","Env":["PATH=/usr/bin","HOME=/home/node"]}"#;
+
+    #[test]
+    fn reads_the_keys_docker_actually_prints() {
+        let cfg: ImageConfig = serde_json::from_str(REAL).expect("parse");
+        assert_eq!(cfg.user(), "node");
+        assert_eq!(cfg.env_home().as_deref(), Some("/home/node"));
+    }
+
+    #[test]
+    fn lowercase_keys_do_not_parse_into_anything() {
+        // Not a test of correct behaviour, but of the failure this guards
+        // against: had the struct lacked `rename_all`, this is the shape the
+        // code would have seen, and every path would have fallen back to root.
+        let cfg: ImageConfig =
+            serde_json::from_str(r#"{"user":"node","env":["HOME=/home/node"]}"#).expect("parse");
+        assert_eq!(cfg.user(), "");
+        assert_eq!(cfg.env_home(), None);
+    }
+
+    #[test]
+    fn an_image_declaring_nothing_is_not_an_error() {
+        let cfg: ImageConfig = serde_json::from_str("{}").expect("parse");
+        assert_eq!(cfg.user(), "");
+        assert_eq!(cfg.env_home(), None);
     }
 }

@@ -45,18 +45,16 @@ pub fn execute_delete(args: DeleteArgs) -> Result<()> {
     println!("Deleted record: {}", args.name);
 
     if args.purge {
-        purge_data(&args.name);
-    } else {
-        // Said every time rather than only when a directory exists, because the
-        // record is what says whether it was persisted, and that has just been
-        // deleted along with the rest.
-        if let Ok(dir) = persist::container_data_dir(&args.name)
-            && dir.exists()
-        {
-            println!();
-            println!("Persisted data kept at: {}", dir.display());
-            println!("  Remove it with: rm -rf {}", dir.display());
-        }
+        purge_data(&args.name)?;
+    } else if let Ok(dir) = persist::container_data_dir(&args.name)
+        && dir.exists()
+    {
+        // Only when there is something to keep. The record that said whether it
+        // was persisted has just been deleted, so the directory itself is the
+        // only thing left that knows.
+        println!();
+        println!("Persisted data kept at: {}", dir.display());
+        println!("  Remove it with: rm -rf {}", dir.display());
     }
 
     Ok(())
@@ -65,16 +63,18 @@ pub fn execute_delete(args: DeleteArgs) -> Result<()> {
 /// Delete the host directory a container's persisted data lives in.
 ///
 /// The whole container directory, so a container that was renamed cannot leave
-/// an orphan half behind. Missing is not an error: the point of `--purge` is
-/// that the data is gone afterwards, and it already being gone satisfies that.
-fn purge_data(name: &str) {
-    let dir = match persist::container_data_dir(name) {
-        Ok(dir) => dir,
-        Err(_) => return,
-    };
+/// an orphan half behind. A directory that is already gone is not an error: the
+/// point of `--purge` is that the data is gone afterwards, and it already being
+/// gone satisfies that.
+///
+/// An unusable name is a different matter and does fail: `--purge` asked for
+/// the data to be gone, and returning success while deleting nothing would
+/// report a purge that did not happen.
+fn purge_data(name: &str) -> Result<()> {
+    let dir = persist::container_data_dir(name)?;
 
     if !dir.exists() {
-        return;
+        return Ok(());
     }
 
     match std::fs::remove_dir_all(&dir) {
@@ -86,4 +86,5 @@ fn purge_data(name: &str) {
             println!("            remove it with: rm -rf {}", dir.display());
         }
     }
+    Ok(())
 }
