@@ -34,6 +34,7 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
                 record.path.display().to_string(),
                 status_str.to_string(),
                 record.created_at.clone(),
+                ports(record),
                 record.http_proxy.clone().unwrap_or_else(|| "-".to_string()),
                 record
                     .https_proxy
@@ -68,6 +69,7 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
                 "PATH",
                 "STATUS",
                 "CREATED",
+                "PORTS",
                 "HTTP_PROXY",
                 "HTTPS_PROXY",
                 "PERSISTED",
@@ -79,6 +81,15 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn ports(record: &crate::state::Record) -> String {
+    record
+        .ports
+        .clone()
+        .filter(|p| !p.is_empty())
+        .map(|p| p.join(" "))
+        .unwrap_or_else(|| "-".to_string())
 }
 
 /// What `agentdock list -v` reports for a record's persisted directories.
