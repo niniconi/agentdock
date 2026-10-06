@@ -19,7 +19,7 @@ pub fn run_init_script(name: &str, init_content: Option<&str>) -> Result<()> {
             .with_context(|| format!("Failed to copy init script from: {}", tmp_path.display()))?;
 
         println!("Executing init script...");
-        DockerClient::exec(name, "chmod +x /tmp/init.sh && /tmp/init.sh")?;
+        DockerClient::exec_script(name, "chmod +x /tmp/init.sh && /tmp/init.sh")?;
 
         let _ = std::fs::remove_file(&tmp_path);
     }

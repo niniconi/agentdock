@@ -120,7 +120,7 @@ impl AgentConfig {
     /// of its own: `ghcr.io/owner/nixos/opencode` is one image and one agent,
     /// and splitting at the first slash reads it as the image `ghcr.io`. That
     /// matters beyond the image field, since `agent_name` is what gets handed to
-    /// `docker exec -it <name> sh -c <agent_name>`.
+    /// `docker exec [-it] <name> sh -c <agent_name>`.
     pub fn parse(input: &str) -> Result<Self, String> {
         match input.rsplit_once('/') {
             Some((docker_image, agent_name)) => {

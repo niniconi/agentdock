@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use serde::Deserialize;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -139,9 +140,32 @@ impl DockerClient {
         check("restart container", &output)
     }
 
-    pub fn exec(name: &str, command: &str) -> Result<()> {
+    /// Run a one-shot command inside the container, without a terminal.
+    ///
+    /// Init scripts are not a user sitting at a prompt, so `-it` would only
+    /// make them fail anywhere without a TTY (CI, piped shells).
+    pub fn exec_script(name: &str, command: &str) -> Result<()> {
         let status = Command::new("docker")
-            .args(["exec", "-it", name, "sh", "-c", command])
+            .args(["exec", name, "sh", "-c", command])
+            .status()?;
+
+        if !status.success() {
+            bail!(ContainerError::ExecFailed {
+                code: status.code().unwrap_or(-1),
+            });
+        }
+
+        Ok(())
+    }
+
+    pub fn exec(name: &str, command: &str) -> Result<()> {
+        let mut args = vec!["exec"];
+        if std::io::stdin().is_terminal() {
+            args.push("-it");
+        }
+        let status = Command::new("docker")
+            .args(args)
+            .args([name, "sh", "-c", command])
             .status()?;
 
         if !status.success() {

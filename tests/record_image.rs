@@ -165,7 +165,10 @@ fn image_in_run(log: &str) -> Option<String> {
 
 fn exec_agent(log: &str) -> Option<String> {
     log.lines()
-        .find_map(|l| l.strip_prefix("docker exec -it "))
+        .find_map(|l| {
+            l.strip_prefix("docker exec -it ")
+                .or_else(|| l.strip_prefix("docker exec "))
+        })
         .and_then(|rest| rest.rsplit("sh -c ").next().map(|s| s.to_string()))
 }
 
