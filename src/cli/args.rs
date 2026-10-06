@@ -65,6 +65,13 @@ pub struct ApplyOpts {
     #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
     pub env: Vec<String>,
 
+    /// Read container environment variables from a file, one KEY=VALUE per
+    /// line. Blank lines and lines starting with # are ignored.
+    ///
+    /// Values from -e/--env override the same key from this file.
+    #[arg(long, value_name = "PATH")]
+    pub env_file: Option<PathBuf>,
+
     /// Persist opencode's config and data directories under
     /// ~/.local/share/agentdock/<container>/opencode/
     ///
@@ -169,7 +176,7 @@ pub enum WorktreeArgs {
     /// Convert the current project into worktree form
     Init(WorktreeInitArgs),
     /// Add a worktree for a new branch
-    Add(WorktreeAddArgs),
+    Add(Box<WorktreeAddArgs>),
     /// List all worktrees in this project
     List(WorktreeListArgs),
     /// Remove a worktree

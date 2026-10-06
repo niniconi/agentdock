@@ -26,7 +26,7 @@ pub fn execute_apply(args: ApplyArgs) -> Result<()> {
     };
 
     let agent = AgentConfig::parse(&args.opts.agent).map_err(|e| anyhow::anyhow!(e))?;
-    let config = Config::new(agent, &args.opts);
+    let config = Config::new(agent, &args.opts)?;
 
     let (name, existed) = match existing {
         Some((name, _)) => (name, true),

@@ -1,6 +1,44 @@
 use crate::cli::ApplyOpts;
 use crate::state::Record;
 
+/// Read KEY=VALUE lines from an env file.
+///
+/// Blank lines and lines whose first non-space character is `#` are skipped.
+/// Each remaining line must be KEY=VALUE, or an error naming the line is
+/// returned. Kept deliberately small: no `export ` prefixes, no quotes, no
+/// interpolation.
+pub fn parse_env_file(path: &std::path::Path) -> Result<Vec<String>, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Cannot read env file '{}': {}", path.display(), e))?;
+    let mut out = Vec::new();
+    for (i, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        validate_env(line).map_err(|e| format!("{}:{}: {}", path.display(), i + 1, e))?;
+        out.push(line.to_string());
+    }
+    Ok(out)
+}
+
+/// Merge env-file entries and -e entries the way `docker run --env-file` and
+/// `-e` interact: both are honored, and `-e` wins on a duplicate key.
+pub fn merge_envs(from_file: Vec<String>, from_flags: Vec<String>) -> Vec<String> {
+    fn key_of(entry: &str) -> &str {
+        entry.split_once('=').map(|(k, _)| k).unwrap_or(entry)
+    }
+    let mut out: Vec<String> = from_file;
+    for entry in from_flags {
+        let key = key_of(&entry);
+        match out.iter().position(|e| key_of(e) == key) {
+            Some(i) => out[i] = entry,
+            None => out.push(entry),
+        }
+    }
+    out
+}
+
 /// Validate port mapping format (HOST:CONTAINER)
 pub fn validate_port_mapping(port: &str) -> Result<(), String> {
     let parts: Vec<&str> = port.split(':').collect();
@@ -97,8 +135,8 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(agent: AgentConfig, opts: &ApplyOpts) -> Self {
-        Self {
+    pub fn new(agent: AgentConfig, opts: &ApplyOpts) -> anyhow::Result<Self> {
+        Ok(Self {
             docker_image: agent.docker_image,
             agent_name: agent.agent_name,
             ports: opts.port.clone(),
@@ -107,8 +145,14 @@ impl Config {
             init_content: None,
             kvm: opts.kvm,
             persist: opts.persist.as_deref().map(parse_persist),
-            envs: opts.env.clone(),
-        }
+            envs: match &opts.env_file {
+                Some(path) => {
+                    let from_file = parse_env_file(path).map_err(|e| anyhow::anyhow!(e))?;
+                    merge_envs(from_file, opts.env.clone())
+                }
+                None => opts.env.clone(),
+            },
+        })
     }
 
     /// The configuration a record describes, for a command that reads it rather
