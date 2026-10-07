@@ -85,6 +85,11 @@ fn docker(args: &[&str]) -> String {
         .args(args)
         .output()
         .expect("run docker");
+    assert!(
+        out.status.success(),
+        "docker {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
@@ -136,7 +141,7 @@ fn apply_configures_a_real_container() {
     let mounts = docker(&[
         "inspect",
         "-f",
-        "{{range .Mounts}}{{.Destination}} {{end}}{{end}}",
+        "{{range .Mounts}}{{.Destination}} {{end}}",
         "real-apply",
     ]);
     assert!(
