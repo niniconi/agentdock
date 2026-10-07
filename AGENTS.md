@@ -77,6 +77,25 @@ assert exact command sequences. The stub's own assumptions about the daemon (ins
 spellings, config keys) are only checkable through `docker_real.rs`, so a change to
 `src/docker/` that touches the daemon interface belongs in both.
 
+**Testing is not optional.** Every behaviour change needs a test that exercises it, in
+the same commit as the implementation. The expected placement, in order of preference:
+
+1. **Real docker** (`tests/docker_real.rs`) for anything that touches a container.
+   This is the default: stub docker cannot verify that what agentdock emits is what the
+   daemon actually does (inspect key spellings, cgroup values, mount destinations, TTY
+   behaviour). It only needs pulling an image and starting a container.
+2. **Daemon-independent** (`tests/local.rs`) for records parsing, argument validation,
+   path-escape refusal, list formatting — things that never need a live daemon. These
+   still assert against the real binary, just with a stubbed `docker` on PATH.
+3. **Stub docker** (`tests/record_image.rs`) only when the fixture itself is the point:
+   a fabricated `USER`/`HOME` image config, the default-agent name with no real binary,
+   or asserting an exact command sequence we could not observe another way. If one of
+   your cases fits here, say why in the test name or a comment.
+
+The same scenario vector may be asserted in both the stub and the real suite, but the
+stub half adds no behaviour coverage; it only pins the exact arguments. Lead with the
+real test, and do not stop there just because the stub half also exists.
+
 ## Architecture
 
 Single crate, binary-only (no lib target), so `pub` on items in `src/` does not mean public
