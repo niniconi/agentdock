@@ -318,4 +318,79 @@ mod tests {
         assert_eq!(config.docker_image, "localhost:5000/nixos");
         assert_eq!(config.agent_name, "pi-agent");
     }
+
+    #[test]
+    fn env_requires_a_key_and_no_whitespace_in_it() {
+        assert!(validate_env("FOO=bar").is_ok());
+        assert!(validate_env("FOO=").is_ok());
+        assert!(validate_env("FOO=a=b=c").is_ok());
+        assert!(validate_env("=bar").is_err());
+        assert!(validate_env("FOO").is_err());
+        assert!(validate_env("FOO BAR=x").is_err());
+        assert!(validate_env(" FOO=x").is_err());
+    }
+
+    #[test]
+    fn memory_accepts_a_count_and_a_unit_suffix() {
+        assert!(validate_memory("512m").is_ok());
+        assert!(validate_memory("2g").is_ok());
+        assert!(validate_memory("1G").is_ok());
+        assert!(validate_memory("1073741824").is_ok());
+        assert!(validate_memory("10k").is_ok());
+        assert!(validate_memory("xyz").is_err());
+        assert!(validate_memory("").is_err());
+        assert!(validate_memory("m").is_err());
+        assert!(validate_memory("1.5g").is_err());
+    }
+
+    #[test]
+    fn cpus_accepts_only_positive_numbers() {
+        assert!(validate_cpus("1").is_ok());
+        assert!(validate_cpus("0.5").is_ok());
+        assert!(validate_cpus("2.5").is_ok());
+        assert!(validate_cpus("0").is_err());
+        assert!(validate_cpus("-1").is_err());
+        assert!(validate_cpus("abc").is_err());
+        assert!(validate_cpus("").is_err());
+    }
+
+    #[test]
+    fn env_file_skips_blanks_and_comments_and_names_bad_lines() {
+        let dir = std::env::temp_dir().join(format!("agentdock-envf-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.env");
+        std::fs::write(&path, "A=1\n# comment\n\nB=x=y\n").unwrap();
+        assert_eq!(
+            parse_env_file(&path).unwrap(),
+            vec!["A=1".to_string(), "B=x=y".to_string()]
+        );
+
+        std::fs::write(&path, "A=1\nBADLINE\n").unwrap();
+        let err = parse_env_file(&path).unwrap_err();
+        assert!(err.contains(":2:"), "error should name the line: {err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn env_file_reports_unreadable_paths() {
+        let err = parse_env_file(std::path::Path::new("/nonexistent/x.env")).unwrap_err();
+        assert!(err.contains("Cannot read env file"), "{err}");
+    }
+
+    #[test]
+    fn merge_envs_lets_flags_win_on_duplicate_keys() {
+        let merged = merge_envs(
+            vec!["A=fromfile".to_string(), "B=2".to_string()],
+            vec!["A=fromflag".to_string(), "C=3".to_string()],
+        );
+        assert_eq!(
+            merged,
+            vec![
+                "A=fromflag".to_string(),
+                "B=2".to_string(),
+                "C=3".to_string()
+            ]
+        );
+    }
 }

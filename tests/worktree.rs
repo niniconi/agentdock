@@ -558,3 +558,74 @@ fn rm_protects_the_main_worktree() {
     assert!(!out.status.success(), "main worktree was removable");
     assert!(main.join(".git").exists(), "main worktree was destroyed");
 }
+
+#[test]
+fn init_refuses_a_leftover_stage_directory() {
+    let Some(sb) = Sandbox::new("stage") else {
+        return;
+    };
+    let repo = make_repo(&sb, "myproject", "main");
+    // A stage dir next to the repo means an earlier init died mid-move.
+    std::fs::create_dir_all(sb.path(".myproject.agentdock-stage")).expect("stage");
+
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    assert!(!out.status.success(), "init should refuse a leftover stage");
+    assert!(
+        stderr(&out).contains("agentdock-stage") || stderr(&out).contains("stage"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(repo.join(".git").exists(), "the repo must be untouched");
+}
+
+#[test]
+fn add_with_start_point_bases_the_branch_on_it() {
+    let Some(sb) = Sandbox::new("startpoint") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    std::fs::write(repo.join("src/lib.rs"), "v2\n").expect("modify");
+    git(&repo, &["add", "src/lib.rs"]);
+    git(&repo, &["commit", "-m", "v2"]);
+    let base = git(&repo, &["rev-parse", "HEAD~1"]);
+
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let main = sb.path("proj/proj-main");
+    let out = agentdock(
+        &main,
+        &sb.home(),
+        &["worktree", "add", "feat", "--start-point", base.trim()],
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let head = git(&sb.path("proj/proj-feat"), &["rev-parse", "HEAD"]);
+    assert_eq!(
+        head.trim(),
+        base.trim(),
+        "feat should start from the old commit"
+    );
+}
+
+#[test]
+fn rm_force_discards_uncommitted_changes() {
+    let Some(sb) = Sandbox::new("rmforce") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    let _ = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    let main = sb.path("proj/proj-main");
+    let _ = agentdock(&main, &sb.home(), &["worktree", "add", "feat"]);
+
+    // Dirty the new worktree: git refuses to remove it without --force.
+    let feat = sb.path("proj/proj-feat");
+    std::fs::write(feat.join("src/lib.rs"), "dirty\n").expect("dirty");
+
+    let out = agentdock(&main, &sb.home(), &["worktree", "rm", "feat"]);
+    assert!(!out.status.success(), "rm without force should be refused");
+
+    let out = agentdock(&main, &sb.home(), &["worktree", "rm", "feat", "--force"]);
+    assert!(out.status.success(), "rm --force failed: {}", stderr(&out));
+    assert!(!feat.exists(), "the worktree directory should be gone");
+}
