@@ -68,7 +68,7 @@ name (`docker is not installed or not on PATH`) rather than a bare OS error.
 relocates real directories while doing so. Read it before touching that area.
 
 **Known gap:** every test returns early instead of failing when `git --version` cannot be
-executed. On a machine without git, all 16 tests report `ok` in about 0.01s having run
+executed. On a machine without git, the suite reports `ok` in about 0.01s having run
 nothing. Do not treat a green suite as proof of anything on such a machine.
 
 `tests/docker_real.rs` is the same shape, pointed at the daemon instead of git: it drives
