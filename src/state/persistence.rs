@@ -45,6 +45,10 @@ pub struct Record {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct StateManager {
+    /// Schema version of this file. Older files without the field load as 0
+    /// and are stamped when the migration runner rewrites them.
+    #[serde(default)]
+    pub version: u32,
     records: HashMap<String, Record>,
 }
 
@@ -57,12 +61,12 @@ impl StateManager {
         Self::load()
     }
 
-    fn config_dir() -> Result<PathBuf> {
+    pub(crate) fn config_dir() -> Result<PathBuf> {
         let home = dirs::home_dir().context("Failed to get user home directory")?;
         Ok(home.join(".config").join("agentdock"))
     }
 
-    fn records_path() -> Result<PathBuf> {
+    pub(crate) fn records_path() -> Result<PathBuf> {
         Ok(Self::config_dir()?.join("records.json"))
     }
 

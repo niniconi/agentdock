@@ -9,27 +9,30 @@ several agents can work in parallel.
 ## Project status
 
 Pre-release: `0.1.0`, untagged. Breaking changes are cheap here, so do not add upgrade
-shims or migration code for state an earlier build wrote, and do not keep a superseded field
-alive out of caution. Remove the old path rather than carrying it for someone who never
-shipped it.
+shims or migration code for state an earlier build wrote **beyond what the `migrate`
+module owns**: `Record`'s fields follow the same rule (its `Option` fields use
+`#[serde(default)]`, its required fields make an older file fail and take `list`,
+`status` and `delete` down together—an accepted outcome). Remove a superseded field
+rather than carrying it for someone who never shipped it.
 
-Two files persist across builds, so a format change in either is felt by anyone who ran an
-earlier version:
+Three artifacts persist across builds, and all are versioned now:
 
-- **`~/.config/agentdock/records.json`.** `Record` carries no version field. Its `Option`
-  fields use `#[serde(default)]` and so tolerate a format change; its required fields do
-  not, so adding one makes an older file fail to parse and takes `list`, `status` and `delete`
-  down together. That is an accepted outcome, not something to code around. `kvm` is a
-  required field, added because `docker run` consumes it and without recording it a later
-  change could never be applied. `persist` is the opposite case: it is `Option<Vec<String>>`
-  even though `docker run` consumes it too, because its container-side paths are **derived
-  from the image** when `apply` runs rather than stored, so there is nothing an older record
-  would be missing.
-- **`.agentdock.json`.** Unlike records, this one marks a project whose directory `worktree
-  init` has already **renamed**. `MARKER_VERSION` is written but `read_marker` never compares
-  it, so a marker with any value deserializes. A change to how worktrees are laid out or
-  named would therefore be applied silently to an already-converted project, whose original
-  location no longer exists.
+- **`~/.config/agentdock/records.json`.** `StateManager.version` is stamped by the
+  migration runner. Its records themselves follow the rule above.
+- **`.agentdock.json`.** The worktree marker's `version` is compared in `read_marker`;
+  an older marker is stamped in place on first read (the layout has not changed, so
+  stamping is the whole migration), a newer one aborts with an upgrade hint.
+- **`~/.local/share/agentdock/version`.** The data-home layout version. First layout
+  change goes here; v0→v1 only stamps the file, there was never an older on-disk
+  layout to convert.
+
+Every structural change (renamed files, moved directories, a directory
+restructure under the data home) belongs in `src/migrate/`: bump the relevant
+`*_CURRENT` constant, add a migration step, and cover it with a test in
+`tests/local.rs` that fabricates the old layout. The runner backs up the previous
+file as `<name>.bak.v<N>` before rewriting, and aborts when a file is
+newer than the binary understands. `worktree`'s marker is migrated lazily in
+`read_marker` because it lives per-project, not in one place the runner could sweep.
 
 ## Commands
 

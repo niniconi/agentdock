@@ -629,3 +629,53 @@ fn rm_force_discards_uncommitted_changes() {
     assert!(out.status.success(), "rm --force failed: {}", stderr(&out));
     assert!(!feat.exists(), "the worktree directory should be gone");
 }
+
+#[test]
+fn read_marker_stamps_an_unversioned_marker() {
+    let Some(sb) = Sandbox::new("markermig") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    let _ = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+
+    // Simulate a marker written before versions were stamped.
+    let marker = sb.path("proj/.agentdock.json");
+    std::fs::write(&marker, r#"{"repo":"proj","main":"proj-main"}"#).expect("rewrite marker");
+
+    let main = sb.path("proj/proj-main");
+    let out = agentdock(&main, &sb.home(), &["worktree", "list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let stamped = std::fs::read_to_string(&marker).expect("read marker");
+    assert!(stamped.contains("\"version\": 1"), "{stamped}");
+    assert!(
+        sb.path("proj/.agentdock.json.bak.v0").exists(),
+        "no backup written"
+    );
+}
+
+#[test]
+fn a_current_version_marker_is_not_rewritten() {
+    let Some(sb) = Sandbox::new("markercurrent") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    let _ = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+
+    let marker = sb.path("proj/.agentdock.json");
+    let before = std::fs::read_to_string(&marker).expect("read marker");
+
+    let main = sb.path("proj/proj-main");
+    let out = agentdock(&main, &sb.home(), &["worktree", "list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap(),
+        before,
+        "marker rewritten"
+    );
+    assert!(
+        !sb.path("proj/.agentdock.json.bak.v0").exists(),
+        "a current marker must not be backed up as old"
+    );
+}

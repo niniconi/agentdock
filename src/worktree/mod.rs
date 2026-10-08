@@ -11,12 +11,15 @@ use crate::error::{ContainerError, WorktreeError, format_conflicts};
 use crate::state::StateManager;
 
 const MARKER_FILE: &str = ".agentdock.json";
-const MARKER_VERSION: u32 = 1;
 
 /// Metadata written into the container directory so it can be recognised even
 /// though the container itself is not a git repository.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Marker {
+    /// Schema version of this file. A missing field deserializes as 0 so the
+    /// migration in `read_marker` can stamp it; a very old fieldless marker is
+    /// indistinguishable from a v0 one at this point and both get stamped.
+    #[serde(default)]
     pub version: u32,
     /// Base name of the original repository, e.g. `myproject`.
     pub repo: String,
@@ -44,6 +47,12 @@ fn marker_path(container: &Path) -> PathBuf {
 
 pub fn read_marker(container: &Path) -> Result<Marker> {
     let path = marker_path(container);
+
+    // Bring the marker up to the current version before reading it: the
+    // marker lives inside the project, so it is migrated lazily on read
+    // rather than by the startup runner.
+    crate::migrate::marker_migrate(&path)?;
+
     let data =
         fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
     serde_json::from_str(&data).with_context(|| format!("Failed to parse {}", path.display()))
@@ -271,7 +280,7 @@ pub fn init() -> Result<()> {
     let _ = git::worktree_prune(&target);
 
     let marker = Marker {
-        version: MARKER_VERSION,
+        version: crate::migrate::MARKER_CURRENT,
         repo: repo_name.clone(),
         main: main_name.clone(),
     };

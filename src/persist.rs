@@ -185,3 +185,13 @@ fn container_home(image: &str) -> Result<String> {
     eprintln!("      If the agent writes elsewhere, nothing is persisted silently.");
     Ok(format!("/home/{user}"))
 }
+
+/// The root of everything agentdock persists on the host
+/// (`<XDG_DATA_HOME|~/.local/share>/agentdock`).
+///
+/// Callers that need one container's directory go through `container_data_dir`;
+/// this one exists for code that manages the whole tree, which is currently
+/// only the migration runner.
+pub fn data_root() -> Result<PathBuf> {
+    Ok(agentdock_data_home()?.join("agentdock"))
+}

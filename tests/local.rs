@@ -236,3 +236,85 @@ fn delete_unknown_name_explains_it() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn startup_migrates_an_unstamped_records_file() {
+    let mut sb = sandbox("mig-records");
+    std::fs::create_dir_all(sb.root.join("home/.local/share/agentdock/box")).expect("data home");
+    sb.write_records(r#"{"records":{"box":{"path":"/tmp","created_at":"x","docker_image":"img","agent_name":"a","kvm":false}}}"#);
+
+    let out = sb.run(&["list"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let records = sb.records();
+    assert!(
+        records.contains("\"version\": 1"),
+        "version not stamped: {records}"
+    );
+    assert!(records.contains("\"box\""), "records lost: {records}");
+    assert!(
+        sb.root
+            .join("home/.config/agentdock/records.json.bak.v0")
+            .exists(),
+        "no backup written"
+    );
+    let version_file = sb.root.join("home/.local/share/agentdock/version");
+    assert_eq!(std::fs::read_to_string(version_file).unwrap(), "1\n");
+}
+
+#[test]
+fn startup_refuses_a_newer_records_version() {
+    let mut sb = sandbox("mig-newer");
+    sb.write_records(r#"{"version":99,"records":{}}"#);
+
+    let out = sb.run(&["list"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("Upgrade agentdock"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn a_records_file_at_the_current_version_is_left_alone() {
+    let mut sb = sandbox("mig-current");
+    sb.write_records(r#"{"version":1,"records":{}}"#);
+
+    let out = sb.run(&["list"]);
+    assert!(out.status.success());
+    assert!(
+        !sb.root
+            .join("home/.config/agentdock/records.json.bak.v0")
+            .exists(),
+        "no backup should be written for a current-version file"
+    );
+}
+
+#[test]
+fn the_layout_version_file_is_stamped_when_missing() {
+    let mut sb = sandbox("mig-layout");
+    // records.json already current, but the data home has no version file.
+    sb.write_records(r#"{"version":1,"records":{}}"#);
+    std::fs::create_dir_all(sb.root.join("home/.local/share/agentdock/box")).expect("data home");
+
+    let out = sb.run(&["list"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let version_file = sb.root.join("home/.local/share/agentdock/version");
+    assert_eq!(std::fs::read_to_string(&version_file).unwrap(), "1\n");
+    assert!(
+        !sb.root
+            .join("home/.local/share/agentdock/version.bak.v0")
+            .exists(),
+        "nothing to back up when the version file did not exist"
+    );
+}
