@@ -19,13 +19,21 @@ fn real_container_id(name: &str) -> String {
     docker(&["inspect", "-f", "{{.Id}}", name])
 }
 
+/// The container's mount destinations, in a canonical order.
+/// `docker inspect` does not guarantee the order of `.Mounts`
+/// (it can change when a container is stopped and started),
+/// so callers compare the set of destinations, never the
+/// daemon's ordering.
 fn destinations(name: &str) -> String {
-    docker(&[
+    let inspect = docker(&[
         "inspect",
         "-f",
         "{{range .Mounts}}{{.Destination}} {{end}}",
         name,
-    ])
+    ]);
+    let mut dests: Vec<&str> = inspect.split_whitespace().collect();
+    dests.sort_unstable();
+    dests.join(" ")
 }
 
 fn persist_dir(sandbox: &Sandbox, name: &str, kind: &str) -> PathBuf {
