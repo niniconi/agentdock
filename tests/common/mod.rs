@@ -99,6 +99,11 @@ impl Sandbox {
         self.root.join("mnt")
     }
 
+    /// The host's own agent config directory, the source `--template` reads.
+    pub fn host_config_dir(&self) -> PathBuf {
+        self.root.join("home/.config/opencode")
+    }
+
     pub fn records(&self) -> String {
         std::fs::read_to_string(self.root.join("home/.config/agentdock/records.json"))
             .unwrap_or_default()
@@ -157,9 +162,16 @@ impl Sandbox {
             path.push_str(&existing);
         }
 
+        // The sandbox owns the whole XDG environment, not just HOME. CI images
+        // bake XDG_CONFIG_HOME into /etc/environment pointing at the runner's
+        // own home, so leaving it alone would read a config that exists nowhere
+        // in the sandbox. The pinned values equal the binary's own fallbacks,
+        // so a bare HOME-only environment still resolves to the same paths.
         Command::new(env!("CARGO_BIN_EXE_agentdock"))
             .current_dir(self.mount())
             .env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", self.root.join("home/.config"))
+            .env("XDG_DATA_HOME", self.root.join("home/.local/share"))
             .env("PATH", path)
             .args(args)
             .output()

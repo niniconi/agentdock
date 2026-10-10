@@ -621,3 +621,124 @@ fn persist_finds_the_home_through_a_registry_qualified_image() {
     let dests = destinations("real-regpersist");
     assert!(dests.contains("/root/.config/opencode"), "{dests}");
 }
+
+#[test]
+fn template_seeds_a_persisted_config_on_a_real_daemon() {
+    let Some(mut s) = sb("tmpl-seed") else { return };
+    s.track("real-tmplseed");
+    let tmpl = s.host_config_dir();
+    std::fs::create_dir_all(&tmpl).expect("template dir");
+    std::fs::write(tmpl.join("opencode.json"), "from-host").expect("template file");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-tmplseed",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-tmplseed",
+            "cat",
+            "/root/.config/opencode/opencode.json"
+        ]),
+        "from-host",
+        "the seeded file is not visible in the container"
+    );
+
+    // The seed is a first-creation event: an edit the agent made through the
+    // mount survives a rebuild, and the host template does not overwrite it.
+    docker(&[
+        "exec",
+        "real-tmplseed",
+        "sh",
+        "-c",
+        "echo edited > /root/.config/opencode/opencode.json",
+    ]);
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-tmplseed",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-tmplseed",
+            "cat",
+            "/root/.config/opencode/opencode.json"
+        ]),
+        "edited",
+        "a reapply re-seeded an existing config directory"
+    );
+}
+
+#[test]
+fn template_copies_host_config_into_an_unpersisted_container() {
+    let Some(mut s) = sb("tmpl-copy") else { return };
+    s.track("real-tmplcopy");
+    let tmpl = s.host_config_dir();
+    std::fs::create_dir_all(tmpl.join("skills")).expect("template dir");
+    std::fs::write(tmpl.join("skills/readme.md"), "host-skill").expect("template file");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-tmplcopy",
+        "--template",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-tmplcopy",
+            "cat",
+            "/root/.config/opencode/skills/readme.md"
+        ]),
+        "host-skill",
+        "the copied template is not visible in the container"
+    );
+    assert!(
+        !persist_dir(&s, "real-tmplcopy", "config").exists(),
+        "an unpersisted config must not be written under the data home"
+    );
+}
+
+#[test]
+fn without_template_the_container_has_no_host_config() {
+    let Some(mut s) = sb("tmpl-off") else { return };
+    s.track("real-tmploff");
+    let tmpl = s.host_config_dir();
+    std::fs::create_dir_all(&tmpl).expect("template dir");
+    std::fs::write(tmpl.join("opencode.json"), "from-host").expect("template file");
+
+    let out = s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-tmploff"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // The host config exists, but `--template` was not given, so it must not
+    // appear inside the container.
+    let present = docker(&[
+        "exec",
+        "real-tmploff",
+        "sh",
+        "-c",
+        "test -e /root/.config/opencode/opencode.json && echo yes || echo no",
+    ]);
+    assert_eq!(
+        present, "no",
+        "the host template leaked in without --template"
+    );
+}

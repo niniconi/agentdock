@@ -163,6 +163,9 @@ pub struct Config {
     /// Which of opencode's directories to mount in, if any. `None` is the
     /// flag being left out, which means nothing is persisted.
     pub persist: Option<Vec<Persist>>,
+    /// Seed the container's config from the host's ~/.config/opencode. See
+    /// `--template`.
+    pub template: bool,
     /// Environment variables passed to the container as `-e KEY=VALUE`.
     /// Always a list. An empty one means none are set.
     pub envs: Vec<String>,
@@ -181,6 +184,7 @@ impl Config {
             init_content: None,
             kvm: opts.kvm,
             persist: opts.persist.as_deref().map(parse_persist),
+            template: opts.template,
             memory: opts.memory.clone(),
             cpus: opts.cpus.clone(),
             envs: match &opts.env_file {
@@ -205,10 +209,18 @@ impl Config {
             init_content: record.init_content.clone(),
             kvm: record.kvm,
             persist: record.persist.as_deref().map(parse_persist),
+            template: false,
             memory: record.memory.clone(),
             cpus: record.cpus.clone(),
             envs: record.envs.clone().unwrap_or_default(),
         }
+    }
+
+    /// Whether `kind` is among the directories this configuration persists.
+    pub fn persists(&self, kind: Persist) -> bool {
+        self.persist
+            .as_ref()
+            .is_some_and(|kinds| kinds.contains(&kind))
     }
 
     /// The record describing a container in this state.

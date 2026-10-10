@@ -97,6 +97,17 @@ pub struct ApplyOpts {
         value_parser = ["config", "data"],
     )]
     pub persist: Option<Vec<String>>,
+
+    /// Use the host's own ~/.config/opencode as a starting point.
+    ///
+    /// When config is persisted, the per-container config directory is seeded
+    /// from it the first time that directory is created; existing files are
+    /// never overwritten. When config is not persisted, the host directory is
+    /// copied straight into the container on every apply, since the container's
+    /// own copy is discarded with it. The host directory is ignored when it
+    /// does not exist.
+    #[arg(long)]
+    pub template: bool,
 }
 
 #[derive(Parser)]

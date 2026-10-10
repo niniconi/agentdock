@@ -105,6 +105,23 @@ agentdock delete box --force --purge  # removes it too
 and conversation history, so erasing it is a separate decision from removing a
 container.
 
+### Seeding a container from your own config
+
+`--template` uses your host `~/.config/opencode` as a starting point, so a fresh
+container already has your MCP servers and skills without installing them again:
+
+```bash
+agentdock apply -a nixos/opencode --persist --template
+```
+
+When config is persisted, the per-container config directory is seeded from the
+host directory the first time it is created. Files that are already there are
+left alone, so the seed happens once and whatever the agent writes afterwards
+survives. When config is not persisted there is no host directory for the
+container to see, so the host config is copied straight into the container on
+every apply — it is discarded with the container anyway. Either way, if you have
+no `~/.config/opencode`, the flag simply does nothing.
+
 ## Worktrees
 
 `agentdock worktree` restructures a single checkout into a container of independent

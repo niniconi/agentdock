@@ -145,6 +145,14 @@ API. Most are `pub` only to cross module boundaries.
   put `nixos`, `nixos:latest` and `ghcr.io/owner/nixos` in separate arms, so pinning a tag meant
   editing the table; and keying on `-a` would refuse persistence to a container entered with
   `bash`, which is one whose agent has not been started yet.
+  `--template` also lives here, split along the same persisted/unpersisted line. When config
+  is persisted, `plan_mounts` seeds the per-container host directory from
+  `<XDG_CONFIG_HOME|~/.config>/opencode` the one time it is created (`seed_config_dir`,
+  skip-existing); when config is not persisted there is no host directory to serve, so
+  `template_into_container` copies the same source into the container with
+  `docker exec mkdir -p` + `docker cp <src>/. <name>:<dest>` on every apply, overwriting. A
+  missing host directory is not an error in either path. Both are gated on `Config.template`;
+  the caller picks between them by `Config::persists`, not by probing the mounts.
 - `src/worktree/` is the `worktree` subcommand, where `git.rs` is a thin `git` CLI wrapper and
   `mod.rs` holds orchestration.
 - `src/state/persistence.rs` reads and writes `~/.config/agentdock/records.json`. Both

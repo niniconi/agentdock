@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use std::path::Path;
 
-use crate::config::Config;
+use crate::config::{Config, Persist};
 use crate::docker::DockerClient;
 use crate::error::ContainerError;
 use crate::init::{read_init_content, run_init_script};
@@ -34,6 +34,12 @@ pub fn create(
     state.save()?;
     println!("Record saved: {} -> {}", name, mount_path.display());
 
+    persist::template_into_container(
+        name,
+        &config.docker_image,
+        config.template,
+        config.persists(Persist::Config),
+    )?;
     run_init_script(name, init_content.as_deref())?;
     Ok(())
 }
@@ -68,6 +74,12 @@ pub fn replace(
     );
     state.save()?;
 
+    persist::template_into_container(
+        name,
+        &config.docker_image,
+        config.template,
+        config.persists(Persist::Config),
+    )?;
     run_init_script(name, init_content.as_deref())?;
     Ok(())
 }
@@ -118,7 +130,7 @@ fn resolve_mounts(name: &str, config: &Config) -> Result<Vec<Mount>> {
         return Ok(Vec::new());
     };
 
-    let mounts = persist::plan_mounts(name, &config.docker_image, kinds)?;
+    let mounts = persist::plan_mounts(name, &config.docker_image, kinds, config.template)?;
 
     for m in &mounts {
         println!("Persisting: {} -> {}", m.host.display(), m.container);

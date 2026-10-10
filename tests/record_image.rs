@@ -139,3 +139,85 @@ fn kvm_flag_maps_the_device_in() {
         sb.records()
     );
 }
+
+/// When config is not persisted there is no host directory for the container to
+/// see, so the template is copied straight in. This pins the exact command
+/// sequence `docker cp` needs to mean "copy the contents", which the stub can
+/// assert but a real container only shows the result of.
+#[test]
+fn template_copies_the_host_config_into_a_run_that_does_not_persist_it() {
+    let mut sb = sandbox("template-copy");
+    let tmpl = sb.host_config_dir();
+    std::fs::create_dir_all(&tmpl).expect("template dir");
+    std::fs::write(tmpl.join("opencode.json"), "{}").expect("template file");
+
+    sb.run(&["apply", "-a", "img/opencode", "-n", "box", "--template"]);
+
+    let log = sb.log();
+    assert!(
+        log.contains("docker exec box sh -c mkdir -p /root/.config/opencode"),
+        "the target directory must exist before the copy: {log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "docker cp {}/. box:/root/.config/opencode",
+            tmpl.display()
+        )),
+        "the contents, not the directory itself: {log}"
+    );
+    assert!(
+        !sb.persist_dir("box", "config").exists(),
+        "an unpersisted config must not be written under the data home"
+    );
+}
+
+/// With config persisted there is a host directory the mount serves, so the
+/// seed happens there and no `docker cp` is involved.
+#[test]
+fn a_persisted_config_is_seeded_rather_than_copied() {
+    let mut sb = sandbox("template-nocp");
+    let tmpl = sb.host_config_dir();
+    std::fs::create_dir_all(&tmpl).expect("template dir");
+    std::fs::write(tmpl.join("opencode.json"), "{}").expect("template file");
+
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/opencode",
+        "-n",
+        "box",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+
+    assert!(
+        !sb.log().contains("docker cp"),
+        "a persisted config is seeded on the host, not copied: {}",
+        sb.log()
+    );
+    assert!(
+        sb.persist_dir("box", "config")
+            .join("opencode.json")
+            .is_file()
+    );
+}
+
+/// `--template` is opt-in. A host config that exists must stay out of the
+/// container when the flag is absent, even though the ephemeral path has no
+/// other reason to skip it.
+#[test]
+fn without_template_the_host_config_is_not_copied_in() {
+    let mut sb = sandbox("template-off");
+    let tmpl = sb.host_config_dir();
+    std::fs::create_dir_all(&tmpl).expect("template dir");
+    std::fs::write(tmpl.join("opencode.json"), "{}").expect("template file");
+
+    sb.run(&["apply", "-a", "img/opencode", "-n", "box"]);
+
+    assert!(
+        !sb.log().contains("docker cp"),
+        "the host template leaked in without --template: {}",
+        sb.log()
+    );
+}

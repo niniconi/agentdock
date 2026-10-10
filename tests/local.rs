@@ -318,3 +318,135 @@ fn the_layout_version_file_is_stamped_when_missing() {
         "nothing to back up when the version file did not exist"
     );
 }
+
+/// Give the sandbox a host-side opencode config to use as a template.
+fn seed_host_template(sb: &Sandbox) {
+    let tmpl = sb.host_config_dir();
+    std::fs::create_dir_all(tmpl.join("skills")).expect("template dir");
+    std::fs::write(tmpl.join("opencode.json"), r#"{"mcp":{}}"#).expect("template file");
+    std::fs::write(tmpl.join("skills/readme.md"), "from-host").expect("template file");
+}
+
+#[test]
+fn template_seeds_a_persisted_config_directory() {
+    let mut sb = sandbox("template-seed");
+    seed_host_template(&sb);
+
+    let out = sb.run(&[
+        "apply",
+        "-a",
+        "img/opencode",
+        "-n",
+        "box",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let cfg = sb.persist_dir("box", "config");
+    assert_eq!(
+        std::fs::read_to_string(cfg.join("opencode.json")).unwrap(),
+        r#"{"mcp":{}}"#
+    );
+    assert_eq!(
+        std::fs::read_to_string(cfg.join("skills/readme.md")).unwrap(),
+        "from-host"
+    );
+    assert!(
+        !sb.persist_dir("box", "data").exists(),
+        "only config was asked for"
+    );
+}
+
+#[test]
+fn template_seeds_a_persisted_config_only_once() {
+    let mut sb = sandbox("template-once");
+    seed_host_template(&sb);
+
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/opencode",
+        "-n",
+        "box",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+    let cfg = sb.persist_dir("box", "config");
+
+    // Whatever the agent wrote must survive the next apply, and a file added to
+    // the host template afterwards must not turn up: seeding happens once, when
+    // the directory is first created.
+    std::fs::write(cfg.join("opencode.json"), "edited-in-container").expect("edit");
+    std::fs::write(sb.host_config_dir().join("added-later.json"), "added-later")
+        .expect("host file");
+
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/opencode",
+        "-n",
+        "box",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+
+    assert_eq!(
+        std::fs::read_to_string(cfg.join("opencode.json")).unwrap(),
+        "edited-in-container"
+    );
+    assert!(
+        !cfg.join("added-later.json").exists(),
+        "an already-existing directory was re-seeded"
+    );
+}
+
+#[test]
+fn template_without_a_host_directory_is_not_an_error() {
+    let mut sb = sandbox("template-absent");
+    // No ~/.config/opencode exists here, which must simply mean no seeding.
+    let out = sb.run(&[
+        "apply",
+        "-a",
+        "img/opencode",
+        "-n",
+        "box",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let cfg = sb.persist_dir("box", "config");
+    assert!(cfg.is_dir(), "the directory is still created");
+    assert_eq!(
+        std::fs::read_dir(&cfg).unwrap().count(),
+        0,
+        "nothing seeded"
+    );
+}
+
+#[test]
+fn without_template_nothing_seeds_a_new_config_directory() {
+    let mut sb = sandbox("no-template");
+    seed_host_template(&sb);
+
+    sb.run(&["apply", "-a", "img/opencode", "-n", "box", "--persist"]);
+
+    let cfg = sb.persist_dir("box", "config");
+    assert!(
+        std::fs::read_dir(&cfg).unwrap().count() == 0,
+        "the host template leaked in without --template"
+    );
+}

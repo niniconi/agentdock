@@ -5,6 +5,11 @@ use crate::config::Persist;
 use crate::docker::DockerClient;
 use crate::error::ContainerError;
 
+/// The container-side config directory, relative to the agent's home.
+const CONFIG_REL: &str = ".config/opencode";
+/// The container-side data directory, relative to the agent's home.
+const DATA_REL: &str = ".local/share/opencode";
+
 /// Where each supported agent keeps its directories, relative to its home.
 ///
 /// Every entry is mounted for every container that asked for its kind, rather
@@ -18,8 +23,8 @@ use crate::error::ContainerError;
 /// One entry per directory, so adding an agent is one line per directory it
 /// keeps.
 const SUPPORTED: &[(&str, Persist, &str)] = &[
-    ("opencode", Persist::Config, ".config/opencode"),
-    ("opencode", Persist::Data, ".local/share/opencode"),
+    ("opencode", Persist::Config, CONFIG_REL),
+    ("opencode", Persist::Data, DATA_REL),
 ];
 
 /// One resolved bind mount: a host directory and where it appears inside.
@@ -39,7 +44,16 @@ pub struct Mount {
 /// absolute path and the image is the only thing that knows its own home
 /// directory. Nothing here is asked for on the command line: the user says
 /// which directories, not where they are.
-pub fn plan_mounts(container: &str, image: &str, kinds: &[Persist]) -> Result<Vec<Mount>> {
+///
+/// When `template` is set, a config directory that is being created for the
+/// first time is seeded from the host's `~/.config/opencode`. It is the same
+/// host directory the mount serves, so the seed is what the container sees.
+pub fn plan_mounts(
+    container: &str,
+    image: &str,
+    kinds: &[Persist],
+    template: bool,
+) -> Result<Vec<Mount>> {
     let wanted: Vec<&(&str, Persist, &str)> = SUPPORTED
         .iter()
         .filter(|(_, kind, _)| kinds.contains(kind))
@@ -57,9 +71,21 @@ pub fn plan_mounts(container: &str, image: &str, kinds: &[Persist]) -> Result<Ve
     let home = container_home(image)?;
     let home = home.trim_end_matches('/');
 
+    // Resolved once, and only when asked for, so the common path makes no
+    // extra filesystem lookups.
+    let source = if template {
+        host_config_template()?
+    } else {
+        None
+    };
+
     let mut mounts = Vec::new();
     for (agent, kind, rel) in wanted {
         let host = base.join(agent).join(kind.as_str());
+        // Whether the directory was already there decides whether a template
+        // seeds it: seeding is a first-creation event, so a container's own
+        // edits are never trampled by a later apply.
+        let existed = host.exists();
         // Created here rather than left to docker, which would leave the
         // directory owned by root on the host when the container runs as root.
         std::fs::create_dir_all(&host).map_err(|e| {
@@ -69,6 +95,13 @@ pub fn plan_mounts(container: &str, image: &str, kinds: &[Persist]) -> Result<Ve
             ))
         })?;
 
+        if let Some(source) = &source
+            && !existed
+            && *kind == Persist::Config
+        {
+            seed_config_dir(source, &host)?;
+        }
+
         mounts.push(Mount {
             host,
             container: format!("{home}/{rel}"),
@@ -76,6 +109,107 @@ pub fn plan_mounts(container: &str, image: &str, kinds: &[Persist]) -> Result<Ve
     }
 
     Ok(mounts)
+}
+
+/// Copy the host's `~/.config/opencode` into `container` for a run that asked
+/// for `--template` but does not persist config.
+///
+/// A run that persists config is seeded through `plan_mounts` instead, on the
+/// host directory the mount serves, so this does nothing there. Here there is no
+/// such directory, so the template is copied straight into the container; it is
+/// overwritten on every apply because the container's copy is thrown away with
+/// the container. The container-side path comes from the image's home, the same
+/// as a mount target.
+///
+/// A run that did not ask for `--template`, or whose host has no such directory,
+/// is not an error: there is simply nothing to seed.
+pub fn template_into_container(
+    name: &str,
+    image: &str,
+    template: bool,
+    config_persisted: bool,
+) -> Result<()> {
+    if !template || config_persisted {
+        return Ok(());
+    }
+
+    let Some(source) = host_config_template()? else {
+        return Ok(());
+    };
+
+    let home = container_home(image)?;
+    let home = home.trim_end_matches('/');
+    let dest = format!("{home}/{CONFIG_REL}");
+
+    // `docker cp` copies a directory *into* an existing target rather than over
+    // it, so copy its contents and make sure the target exists first. Parent
+    // directories are created too, since `docker cp` will not.
+    DockerClient::exec_script(name, &format!("mkdir -p {dest}"))?;
+    println!("Templating: {} -> {}:{}", source.display(), name, dest);
+    DockerClient::cp(name, &source.join("."), &dest)?;
+    Ok(())
+}
+
+/// Recursively copy `src` into `dst`, skipping anything `dst` already has.
+///
+/// The skip makes the "never overwrite a file that is already there" guarantee
+/// unconditional: production only ever calls this on a directory it just
+/// created, but the copy itself must not depend on that.
+fn seed_config_dir(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst).map_err(|e| {
+        anyhow::Error::new(e).context(format!("Failed to create {}", dst.display()))
+    })?;
+
+    let entries = std::fs::read_dir(src)
+        .map_err(|e| anyhow::Error::new(e).context(format!("Failed to read {}", src.display())))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            anyhow::Error::new(e).context(format!("Failed to read {}", src.display()))
+        })?;
+        let target = dst.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|e| {
+            anyhow::Error::new(e).context(format!("Failed to stat {}", entry.path().display()))
+        })?;
+
+        if file_type.is_dir() {
+            seed_config_dir(&entry.path(), &target)?;
+        } else if !target.exists() {
+            std::fs::copy(entry.path(), &target).map_err(|e| {
+                anyhow::Error::new(e).context(format!(
+                    "Failed to copy {} to {}",
+                    entry.path().display(),
+                    target.display()
+                ))
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+/// The host's opencode config directory, if it has one.
+///
+/// This is the template `--template` reads. It is the invoking user's own
+/// directory, found through the same XDG config home the data home uses, and a
+/// missing one is `None` rather than an error.
+fn host_config_template() -> Result<Option<PathBuf>> {
+    let dir = xdg_config_home()?.join("opencode");
+    Ok(dir.is_dir().then_some(dir))
+}
+
+/// The invoking user's config home, which is where their agent config lives.
+///
+/// Mirrors `agentdock_data_home`: XDG first, and only when it names an absolute
+/// path, so a relative `XDG_CONFIG_HOME` falls back to the `~/.config` default.
+fn xdg_config_home() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        let dir = PathBuf::from(dir);
+        if dir.is_absolute() {
+            return Ok(dir);
+        }
+    }
+    Ok(home_dir()?.join(".config"))
 }
 
 /// The directory `container` keeps its persisted data under.
@@ -194,4 +328,154 @@ fn container_home(image: &str) -> Result<String> {
 /// only the migration runner.
 pub fn data_root() -> Result<PathBuf> {
     Ok(agentdock_data_home()?.join("agentdock"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serializes tests that mutate process-wide environment variables, which
+    /// the test harness otherwise runs on concurrent threads.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Puts `HOME` and `XDG_CONFIG_HOME` back the way they were found, so a test
+    /// that has to move them cannot leak into a concurrent one.
+    struct EnvGuard {
+        home: Option<std::ffi::OsString>,
+        xdg: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn capture() -> Self {
+            Self {
+                home: std::env::var_os("HOME"),
+                xdg: std::env::var_os("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: the caller holds ENV_LOCK for the whole test, so no other
+            // thread reads or writes these variables while they are restored.
+            unsafe {
+                match &self.home {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+                match &self.xdg {
+                    Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                    None => std::env::remove_var("XDG_CONFIG_HOME"),
+                }
+            }
+        }
+    }
+
+    fn with_host_config(files: &Path, json: &str) {
+        std::fs::create_dir_all(files).expect("create config");
+        std::fs::write(files.join("opencode.json"), json).expect("write opencode.json");
+        std::fs::create_dir_all(files.join("skills")).expect("create skills");
+        std::fs::write(files.join("skills/readme.md"), "host-skill").expect("write readme");
+    }
+
+    fn set_host_env(home: &Path) {
+        // SAFETY: guarded from concurrent mutation by ENV_LOCK, and restored by
+        // EnvGuard when the test returns.
+        unsafe {
+            std::env::set_var("HOME", home);
+            std::env::remove_var("XDG_CONFIG_HOME");
+        }
+    }
+
+    #[test]
+    fn host_config_template_reads_from_home_config_by_default() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env = EnvGuard::capture();
+        let root = scratch("tmpl-home");
+        let files = root.join("home/.config/opencode");
+        with_host_config(&files, "from-home");
+        set_host_env(&root.join("home"));
+
+        let found = host_config_template().expect("resolve");
+        assert_eq!(found, Some(files.clone()));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn host_config_template_honors_xdg_config_home() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env = EnvGuard::capture();
+        let root = scratch("tmpl-xdg");
+        // Somewhere with a config that must take precedence over ~/.config.
+        let xdg = root.join("custom-config");
+        let files = xdg.join("opencode");
+        with_host_config(&files, "from-xdg");
+        set_host_env(&root.join("home"));
+
+        // SAFETY: guarded from concurrent mutation by ENV_LOCK, restored by
+        // EnvGuard on return.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", &xdg);
+        }
+        let found = host_config_template().expect("resolve");
+        assert_eq!(found, Some(files.clone()));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn scratch(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "agentdock-persist-{}-{}",
+            std::process::id(),
+            label
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        dir
+    }
+
+    #[test]
+    fn seed_copies_a_nested_tree_but_keeps_files_already_present() {
+        let root = scratch("seed");
+        let src = root.join("src");
+        let dst = root.join("dst");
+        std::fs::create_dir_all(src.join("skills")).expect("src");
+        std::fs::write(src.join("opencode.json"), "from-host").expect("write");
+        std::fs::write(src.join("skills/readme.md"), "from-host").expect("write");
+
+        // The seed never overwrites what is already there; together with the
+        // first-creation gate in `plan_mounts` that is what keeps a container's
+        // own config intact across a re-apply.
+        std::fs::create_dir_all(&dst).expect("dst");
+        std::fs::write(dst.join("opencode.json"), "kept").expect("write");
+
+        seed_config_dir(&src, &dst).expect("seed");
+
+        assert_eq!(
+            std::fs::read_to_string(dst.join("opencode.json")).unwrap(),
+            "kept"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dst.join("skills/readme.md")).unwrap(),
+            "from-host"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn seed_creates_the_destination_when_it_does_not_exist_yet() {
+        let root = scratch("seed-new");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("src");
+        std::fs::write(src.join("opencode.json"), "x").expect("write");
+
+        let dst = root.join("nested/dst");
+        seed_config_dir(&src, &dst).expect("seed");
+
+        assert!(dst.join("opencode.json").is_file());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

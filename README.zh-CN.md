@@ -93,6 +93,21 @@ agentdock delete box --force --purge  # 一并删除
 `--purge` 永远不会成为默认值。那份数据是你的凭证和对话历史的唯一副本，
 所以「删掉它」应该是与「删掉容器」分开的两个决定。
 
+### 用你自己的配置给容器做模板
+
+`--template` 会把宿主机的 `~/.config/opencode` 当作起点，新建的容器就自带你的
+MCP 和 skills，不必再装一遍：
+
+```bash
+agentdock apply -a nixos/opencode --persist --template
+```
+
+当 config 被持久化时，每个容器的 config 目录在第一次创建时会从宿主机目录种入。
+已经存在的文件不动，所以只种一次，之后 agent 自己写的内容会保留。当 config 没被
+持久化时，容器看不到宿主机目录，于是每次 apply 都把宿主机配置直接复制进容器 ——
+反正它随容器一起丢弃。两种情况里，如果你没有 `~/.config/opencode`，这个 flag
+什么都不做。
+
 ## Worktree
 
 `agentdock worktree` 把一个检出目录改造成一组独立的 git worktree，
