@@ -543,3 +543,62 @@ fn update_keeps_the_recorded_init_script() {
         sb.log()
     );
 }
+
+/// `stop` is the only command that shells out to `docker stop`, and it must
+/// name the recorded container. Stopping is not deleting, so the record has to
+/// survive for `up` to find afterwards.
+#[test]
+fn stop_issues_docker_stop_and_keeps_the_record() {
+    let mut sb = sandbox("stop");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    sb.reset_log();
+    let before: serde_json::Value =
+        serde_json::from_str(&sb.records()).expect("parse records before stop");
+
+    let out = sb.runv(&common::scenarios::stop("box"));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let log = sb.log();
+    assert!(
+        log.contains("docker stop box"),
+        "stop must name the container: {log}"
+    );
+    let after: serde_json::Value =
+        serde_json::from_str(&sb.records()).expect("parse records after stop");
+    assert_eq!(
+        after["records"], before["records"],
+        "stop must leave the records untouched"
+    );
+}
+
+/// A stopped container is the state the user asked for, so `stop` succeeds
+/// without issuing a second `docker stop`.
+#[test]
+fn stop_reports_a_container_that_is_already_stopped() {
+    let mut sb = sandbox("stop-already");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    // The stub's `stop` clears its running marker, so the container is now down.
+    sb.run(&["stop", "-n", "box"]);
+    sb.reset_log();
+
+    let out = sb.run(&["stop", "-n", "box"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !sb.log().contains("docker stop"),
+        "an already-stopped container is not stopped again: {}",
+        sb.log()
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("already stopped"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}

@@ -27,6 +27,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Apply(args) => commands::execute_apply(*args),
         Commands::Up(args) => commands::execute_up(args),
+        Commands::Stop(args) => commands::execute_stop(args),
         Commands::Update(args) => commands::execute_update(args),
         Commands::List(args) => commands::execute_list(args),
         Commands::Delete(args) => commands::execute_delete(args),

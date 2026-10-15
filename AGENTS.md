@@ -59,7 +59,7 @@ Neither is checked up front, so a missing tool surfaces late, but both now repor
 name (`docker is not installed or not on PATH`) rather than a bare OS error.
 
 - **`git` must be on PATH** for the `worktree` subcommand and for the integration suite.
-- **`docker` must be on PATH** for `apply`/`up`/`update`/`list`/`delete`/`status`. Without it, `apply`
+- **`docker` must be on PATH** for `apply`/`up`/`stop`/`update`/`list`/`delete`/`status`. Without it, `apply`
   prints `Creating container: ...` and then fails with
   `docker is not installed or not on PATH`. Records are written only after the container
   starts, so a failure here leaves no stale state.

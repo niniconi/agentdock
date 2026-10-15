@@ -220,6 +220,51 @@ fn up_restarts_a_stopped_container() {
 }
 
 #[test]
+fn stop_stops_a_running_container_and_keeps_it() {
+    let Some(mut s) = sb("stop") else { return };
+    s.track("real-stop");
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-stop"]);
+    let id = real_container_id("real-stop");
+    let before: serde_json::Value =
+        serde_json::from_str(&s.records()).expect("parse records before stop");
+
+    let out = s.runv(&scenarios::stop("real-stop"));
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(
+        docker(&["inspect", "-f", "{{.State.Running}}", "real-stop"]),
+        "false",
+        "stop left the container running"
+    );
+    // Stopping is not deleting: the container and its record both survive,
+    // unchanged.
+    assert_eq!(
+        real_container_id("real-stop"),
+        id,
+        "stop removed the container"
+    );
+    let after: serde_json::Value =
+        serde_json::from_str(&s.records()).expect("parse records after stop");
+    assert_eq!(
+        after["records"], before["records"],
+        "stop must leave the records untouched"
+    );
+}
+
+#[test]
+fn stop_refuses_a_record_whose_container_is_gone() {
+    let Some(mut s) = sb("stopgone") else { return };
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-stopgone"]);
+    docker(&["rm", "-f", "real-stopgone"]);
+
+    let out = s.run(&["stop", "-n", "real-stopgone"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("apply"), "{err}");
+    assert!(err.contains("delete"), "{err}");
+}
+
+#[test]
 fn up_does_not_demand_a_tty() {
     let Some(mut s) = sb("tty") else { return };
     s.track("real-tty");

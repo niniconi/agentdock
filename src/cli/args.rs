@@ -14,6 +14,8 @@ pub enum Commands {
     Apply(Box<ApplyArgs>),
     /// Start an existing container without changing how it was built
     Up(UpArgs),
+    /// Stop a running container without removing it
+    Stop(StopArgs),
     /// Move an existing container onto the image its tag now points at,
     /// keeping the configuration it was created with
     Update(UpdateArgs),
@@ -149,6 +151,25 @@ pub struct UpArgs {
 }
 
 impl UpArgs {
+    pub fn get_mount_path(&self) -> PathBuf {
+        self.path
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().expect("Failed to get current directory"))
+    }
+}
+
+#[derive(Parser)]
+pub struct StopArgs {
+    /// Host mount directory (default: current directory)
+    #[arg(short, long)]
+    pub path: Option<PathBuf>,
+
+    /// Record identifier name
+    #[arg(short, long)]
+    pub name: Option<String>,
+}
+
+impl StopArgs {
     pub fn get_mount_path(&self) -> PathBuf {
         self.path
             .clone()

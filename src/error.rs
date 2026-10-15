@@ -209,6 +209,17 @@ Suggested actions:
     NotManagedForUpdate { name: String, flag: String },
 
     #[error(
+        "No container is managed {name}
+
+This command stops what agentdock already recorded; it does not create one.
+
+Suggested actions:
+  - agentdock list            # see what is managed
+  - agentdock apply{flag}     # create it, then stop it"
+    )]
+    NotManagedForStop { name: String, flag: String },
+
+    #[error(
         "Container '{name}' is running.
 
 Suggested actions:

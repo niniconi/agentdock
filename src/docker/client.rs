@@ -184,7 +184,6 @@ impl DockerClient {
         check("copy file to container", &output)
     }
 
-    #[allow(dead_code)]
     pub fn stop(name: &str) -> Result<()> {
         let output = docker(&["stop", name])?;
         check("stop container", &output)

@@ -16,6 +16,7 @@ agentdock <COMMAND>
 | --- | --- |
 | `apply` | Create a container, or change an existing one to match the given settings |
 | `up` | Start an existing container without changing how it was built |
+| `stop` | Stop a running container without removing it |
 | `update` | Move an existing container onto the image its tag now points at |
 | `list` | List all managed containers |
 | `delete` | Delete a container and its record |
@@ -48,6 +49,18 @@ agentdock up               # the container serving this directory
 
 It does not create containers. Where there is nothing to start it says so and
 points at `apply`.
+
+`stop` is the counterpart to `up`: it brings a running container down and keeps
+its record, so the same container comes back with `up` and keeps how it was
+built. Stopping never removes anything, so it does not need `--force`.
+
+```bash
+agentdock stop -n box      # stop the container
+agentdock stop             # the container serving this directory
+```
+
+It does not create containers either, and a container that is already stopped is
+reported as such rather than treated as an error.
 
 ### Updating a container onto a newer image
 

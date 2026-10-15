@@ -271,6 +271,18 @@ fn update_unknown_name_explains_it() {
     assert!(stderr.contains("apply"), "{stderr}");
 }
 
+/// `stop` reads from a record, so with no record there is nothing to stop and
+/// the failure has to point at `apply`.
+#[test]
+fn stop_unknown_name_explains_it() {
+    let mut sb = sandbox("stop-unknown");
+    let out = sb.run(&["stop", "-n", "ghost"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(stderr.contains("ghost"), "{stderr}");
+    assert!(stderr.contains("apply"), "{stderr}");
+}
+
 /// The image tag and the id `update` compares are both recorded at creation and
 /// shown to the user, so both have to survive a round trip through the records
 /// file. The tag is asserted with a name that appears nowhere else in the row,

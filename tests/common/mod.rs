@@ -82,6 +82,7 @@ impl Sandbox {
                  case \"$1\" in\n\
                  inspect) if [ -f \"{gone}\" ]; then exit 1; fi; if [ -f \"{running}\" ]; then echo true; else echo false; fi ;;\n\
                  run) shift; while [ $# -gt 0 ]; do case \"$1\" in -d) touch \"{running}\"; exit 0;; esac; shift; done; exit 0 ;;\n\
+                 stop) rm -f \"{running}\"; exit 0 ;;\n\
                  pull) if [ -f \"{pull_fail}\" ]; then echo 'pull access denied' >&2; exit 1; fi; exit 0 ;;\n\
                  *) exit 0 ;;\n\
                  esac\n",
@@ -309,5 +310,9 @@ pub mod scenarios {
 
     pub fn up(name: &str) -> Vec<String> {
         ["up", "-n", name].iter().map(|s| s.to_string()).collect()
+    }
+
+    pub fn stop(name: &str) -> Vec<String> {
+        ["stop", "-n", name].iter().map(|s| s.to_string()).collect()
     }
 }
