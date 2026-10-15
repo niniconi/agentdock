@@ -925,3 +925,186 @@ fn template_copies_pi_agent_config_into_an_unpersisted_container() {
         "an unpersisted config must not be written under the data home"
     );
 }
+
+/// Update the container onto a moved tag and check the three things the rebuild
+/// has to keep: the published port, the environment, and the mounted data. The
+/// tag is repointed by building the same reference again, which is what a
+/// rebuilt `:latest` does in practice.
+#[test]
+fn update_recreates_onto_a_repointed_tag_and_keeps_its_configuration() {
+    let Some(mut s) = sb("update-move") else {
+        return;
+    };
+    s.track("real-update");
+
+    let ctx = s.root.join("ctx");
+    std::fs::create_dir_all(&ctx).expect("ctx");
+    let build = |body: &str| {
+        std::fs::write(ctx.join("Dockerfile"), body).expect("dockerfile");
+        let out = std::process::Command::new("docker")
+            .args([
+                "build",
+                "-t",
+                "agentdock-update-probe:1",
+                ctx.to_str().unwrap(),
+            ])
+            .output()
+            .expect("docker build");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    build("FROM alpine:3.20\n");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "agentdock-update-probe:1/sh",
+        "-n",
+        "real-update",
+        "--persist",
+        "-e",
+        "FOO=bar",
+        "-P",
+        "8080:80",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Written through the mount, so a rebuild that dropped the mount would lose
+    // it from the container's point of view even though it survived on the host.
+    docker(&[
+        "exec",
+        "real-update",
+        "sh",
+        "-c",
+        "echo kept > /root/.config/opencode/keep.txt",
+    ]);
+    let first = real_container_id("real-update");
+
+    build("FROM alpine:3.20\nRUN true\n");
+    let out = s.run(&["update", "-n", "real-update", "--no-pull"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_ne!(
+        real_container_id("real-update"),
+        first,
+        "update did not rebuild onto the moved tag"
+    );
+    assert_eq!(
+        docker(&["exec", "real-update", "sh", "-c", "echo $FOO"]),
+        "bar",
+        "the environment was not kept"
+    );
+    let ports = docker(&[
+        "inspect",
+        "-f",
+        "{{json .HostConfig.PortBindings}}",
+        "real-update",
+    ]);
+    assert!(ports.contains("8080"), "the port was not kept: {ports}");
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-update",
+            "cat",
+            "/root/.config/opencode/keep.txt"
+        ]),
+        "kept",
+        "the persisted directory did not survive the update"
+    );
+
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    let new_id = docker(&[
+        "image",
+        "inspect",
+        "-f",
+        "{{.Id}}",
+        "agentdock-update-probe:1",
+    ]);
+    assert_eq!(
+        records["records"]["real-update"]["image_id"],
+        serde_json::json!(new_id),
+        "the record did not pick up the new image id"
+    );
+
+    let _ = std::process::Command::new("docker")
+        .args(["rmi", "-f", "agentdock-update-probe:1"])
+        .output();
+}
+
+/// `update` on a record whose container was removed outside agentdock fails the
+/// same way `up` does, before the rebuild path can surface the `docker rm` error.
+/// The recorded id is dropped so the rebuild branch is the one that would
+/// otherwise run, regardless of the tag.
+#[test]
+fn update_reports_a_container_removed_outside_agentdock() {
+    let Some(mut s) = sb("update-gone") else {
+        return;
+    };
+    s.track("real-updategone");
+    let out = s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-updategone"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let mut records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    records["records"]["real-updategone"]
+        .as_object_mut()
+        .expect("record object")
+        .remove("image_id");
+    s.write_records(&serde_json::to_string(&records).expect("serialise"));
+    docker(&["rm", "-f", "real-updategone"]);
+
+    let out = s.run(&["update", "-n", "real-updategone", "--no-pull"]);
+    assert!(
+        !out.status.success(),
+        "a missing container must fail the update"
+    );
+    let err = stderr(&out);
+    assert!(err.contains("does not exist"), "unfriendly error: {err}");
+    assert!(
+        !err.contains("remove container"),
+        "the rebuild's destroy should not have run: {err}"
+    );
+}
+
+/// A container already on the tag's current image is left as it is: `update`
+/// must not rebuild for nothing.
+#[test]
+fn update_leaves_an_unchanged_container_alone() {
+    let Some(mut s) = sb("update-noop") else {
+        return;
+    };
+    s.track("real-updatetime");
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-updatetime"]);
+    let first = real_container_id("real-updatetime");
+
+    let out = s.run(&["update", "-n", "real-updatetime", "--no-pull"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        real_container_id("real-updatetime"),
+        first,
+        "an unchanged image must not rebuild"
+    );
+}
+
+/// The pull path against a real registry: after `update`, the container runs the
+/// image the tag now resolves to. Asserting that invariant rather than "nothing
+/// changed", since pulling `alpine:3.20` could legitimately move the tag.
+#[test]
+fn update_pulls_the_tag_and_lands_on_its_current_image() {
+    let Some(mut s) = sb("update-pull") else {
+        return;
+    };
+    s.track("real-updatepull");
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-updatepull"]);
+
+    let out = s.run(&["update", "-n", "real-updatepull"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(
+        docker(&["inspect", "-f", "{{.Image}}", "real-updatepull"]),
+        docker(&["image", "inspect", "-f", "{{.Id}}", "alpine:3.20"]),
+        "the container does not run the image the tag now points at"
+    );
+}

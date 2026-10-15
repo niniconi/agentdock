@@ -259,6 +259,46 @@ fn delete_unknown_name_explains_it() {
     );
 }
 
+/// `update` reads the configuration from a record, so with no record there is
+/// nothing to update and the failure has to point at `apply`.
+#[test]
+fn update_unknown_name_explains_it() {
+    let mut sb = sandbox("update-unknown");
+    let out = sb.run(&["update", "-n", "ghost"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(stderr.contains("ghost"), "{stderr}");
+    assert!(stderr.contains("apply"), "{stderr}");
+}
+
+/// The image tag and the id `update` compares are both recorded at creation and
+/// shown to the user, so both have to survive a round trip through the records
+/// file. The tag is asserted with a name that appears nowhere else in the row,
+/// so the check cannot be satisfied by the path column.
+#[test]
+fn list_verbose_shows_the_image_and_its_id() {
+    let mut sb = sandbox("list-image");
+    sb.run(&["apply", "-a", "myimg:v2/agent", "-n", "box"]);
+
+    let out = sb.run(&["list", "-v"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("IMAGE_ID"), "{stdout}");
+    assert!(stdout.contains("myimg:v2"), "{stdout}");
+    // The stub's default id is `sha256:` + 64 a's, shown in docker's short form.
+    assert!(stdout.contains("aaaaaaaaaaaa"), "{stdout}");
+}
+
+#[test]
+fn status_shows_the_image_and_its_id() {
+    let mut sb = sandbox("status-image");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+
+    let out = sb.run(&["status", "box"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Image:        img"), "{stdout}");
+    assert!(stdout.contains("Image ID:     aaaaaaaaaaaa"), "{stdout}");
+}
+
 #[test]
 fn startup_migrates_an_unstamped_records_file() {
     let mut sb = sandbox("mig-records");

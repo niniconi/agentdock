@@ -3,9 +3,11 @@ pub mod delete;
 pub mod list;
 pub mod status;
 pub mod up;
+pub mod update;
 
 pub use apply::execute_apply;
 pub use delete::execute_delete;
 pub use list::{execute_list, print_table};
 pub use status::execute_status;
 pub use up::execute_up;
+pub use update::execute_update;

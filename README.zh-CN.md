@@ -16,6 +16,7 @@ agentdock <COMMAND>
 | --- | --- |
 | `apply` | 创建容器，或把已有容器改成给定的配置 |
 | `up` | 启动已有容器，不改变它当初的构建方式 |
+| `update` | 把已有容器迁移到它 tag 现在指向的镜像 |
 | `list` | 列出所有受管理的容器 |
 | `delete` | 删除容器及其记录 |
 | `status` | 显示容器状态 |
@@ -43,6 +44,25 @@ agentdock up               # 服务当前目录的那个容器
 ```
 
 `up` 不创建容器。没有东西可启动时它会说明情况并指向 `apply`。
+
+### 把容器更新到更新的镜像
+
+`apply` 从不拉取。它只用本地 tag 指向的镜像构建，所以再执行一次并不能拿到重新构建过的
+`:latest`。`update` 就是做这件事的命令，而且它会沿用容器记录里的配置，不要求你把 flag
+再敲一遍：
+
+```bash
+agentdock update -n box            # 拉取镜像，只有变了才重建
+agentdock update                   # 服务当前目录的那个容器
+agentdock update -n box --no-pull  # 用本地镜像重建，不联网
+agentdock update -n box --dry-run  # 只说明会发生什么，不做任何改动
+```
+
+它从记录里读取端口、环境变量、agent、初始化脚本和持久化目录，拉取镜像，只在「记录里存
+的 image id」与「tag 现在解析到的 image id」不一致时才重建容器。tag 没动时，除了确保容器
+在运行之外什么都不做。持久化目录在宿主机上，会被重新挂载，内容因此得以保留。`status` 会
+显示镜像和它构建时的 id，`list -v` 则把它们作为 `IMAGE` 和 `IMAGE_ID` 两列列出，这样在你
+动手之前就能看出差异。
 
 ### 持久化 agent 自己的数据
 

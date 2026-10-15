@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::cli::ListArgs;
-use crate::docker::{ContainerStatus, DockerClient};
+use crate::docker::{ContainerStatus, DockerClient, short_image_id};
 use crate::state::StateManager;
 
 pub fn execute_list(args: ListArgs) -> Result<()> {
@@ -41,6 +41,12 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
                     .clone()
                     .unwrap_or_else(|| "-".to_string()),
                 persisted(name, record),
+                record.docker_image.clone(),
+                record
+                    .image_id
+                    .as_deref()
+                    .map(short_image_id)
+                    .unwrap_or_else(|| "-".to_string()),
             ]);
         } else {
             rows.push(vec![
@@ -73,6 +79,8 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
                 "HTTP_PROXY",
                 "HTTPS_PROXY",
                 "PERSISTED",
+                "IMAGE",
+                "IMAGE_ID",
             ],
             &rows,
         );

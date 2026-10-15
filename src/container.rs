@@ -18,7 +18,7 @@ pub fn create(
 ) -> Result<()> {
     // Read before anything is created, so an unreadable script leaves neither a
     // container nor a record behind.
-    let init_content = read_init(init_path, mount_path)?;
+    let init_content = read_init(init_path, mount_path, config.init_content.as_deref())?;
     let mounts = resolve_mounts(name, config)?;
 
     let mut applied = config.clone();
@@ -27,10 +27,9 @@ pub fn create(
     println!("Creating container: {}", name);
     DockerClient::run(name, &applied, mount_path, &mounts)?;
 
-    state.insert(
-        name.to_string(),
-        applied.to_record(mount_path.to_path_buf(), crate::state::now_string()),
-    );
+    let mut record = applied.to_record(mount_path.to_path_buf(), crate::state::now_string());
+    record.image_id = recorded_image_id(&config.docker_image);
+    state.insert(name.to_string(), record);
     state.save()?;
     println!("Record saved: {} -> {}", name, mount_path.display());
 
@@ -55,7 +54,7 @@ pub fn replace(
     init_path: Option<&str>,
     state: &mut StateManager,
 ) -> Result<()> {
-    let init_content = read_init(init_path, mount_path)?;
+    let init_content = read_init(init_path, mount_path, config.init_content.as_deref())?;
     // Resolved before the destroy rather than between it and the run: a failure
     // here would leave the user with no container at all, which is the one
     // outcome a rebuild exists to prevent.
@@ -68,10 +67,9 @@ pub fn replace(
     DockerClient::destroy(name)?;
     DockerClient::run(name, &applied, mount_path, &mounts)?;
 
-    state.insert(
-        name.to_string(),
-        applied.to_record(mount_path.to_path_buf(), crate::state::now_string()),
-    );
+    let mut record = applied.to_record(mount_path.to_path_buf(), crate::state::now_string());
+    record.image_id = recorded_image_id(&config.docker_image);
+    state.insert(name.to_string(), record);
     state.save()?;
 
     persist::template_into_container(
@@ -87,11 +85,23 @@ pub fn replace(
 /// Reach a running container with the agent attached, leaving how it was built
 /// alone. Nothing here can change the configuration.
 pub fn start(name: &str, config: &Config) -> Result<()> {
+    ensure_running(name, config)?;
+
+    println!("Starting Agent: {}", config.agent_name);
+    DockerClient::exec(name, &config.agent_name)?;
+    Ok(())
+}
+
+/// Make sure a recorded container is running, without attaching the agent.
+///
+/// `up` is the command that attaches; this is for callers that only need the
+/// container to be up — currently `update`, which leaves a rebuilt container in
+/// the same state `apply` does, with the agent not started. A running container
+/// is left alone, a stopped one is restarted, and a missing one was removed
+/// outside agentdock, which is the same broken state `up` reports.
+pub fn ensure_running(name: &str, config: &Config) -> Result<()> {
     use crate::docker::ContainerStatus;
 
-    // A stopped container is the only case that needs bringing up; a running one
-    // is already there. A missing one was removed outside agentdock, and this
-    // command does not create containers.
     match DockerClient::inspect(name)? {
         ContainerStatus::Stopped => {
             println!("Restarting stopped container: {}", name);
@@ -104,17 +114,39 @@ pub fn start(name: &str, config: &Config) -> Result<()> {
         }),
         ContainerStatus::Running => {}
     }
-
-    println!("Starting Agent: {}", config.agent_name);
-    DockerClient::exec(name, &config.agent_name)?;
     Ok(())
 }
 
-/// The init script's contents, or None when no path was given.
-fn read_init(init_path: Option<&str>, mount_path: &Path) -> Result<Option<String>> {
+/// The image id to record for `config`, or `None` with a warning if it cannot be
+/// read.
+///
+/// The id is what `update` compares to decide whether a container is current, so
+/// losing it only costs one redundant rebuild. That is not worth failing a create
+/// that has already started the container, so a failure is reported and the
+/// record is written without an id.
+fn recorded_image_id(image: &str) -> Option<String> {
+    match DockerClient::image_id(image) {
+        Ok(id) => Some(id),
+        Err(e) => {
+            eprintln!("Warning: could not read the image id of {}: {}", image, e);
+            None
+        }
+    }
+}
+
+/// The init script's contents, or the configuration's own when no path is given.
+///
+/// The fallback is what lets `update` rebuild a container without repeating
+/// `--init`: it has the recorded script and no path, and passing `None` through
+/// would silently drop the script from the rebuilt record.
+fn read_init(
+    init_path: Option<&str>,
+    mount_path: &Path,
+    fallback: Option<&str>,
+) -> Result<Option<String>> {
     match init_path {
         Some(path) => Ok(Some(read_init_content(path, mount_path)?)),
-        None => Ok(None),
+        None => Ok(fallback.map(str::to_string)),
     }
 }
 

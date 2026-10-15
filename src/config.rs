@@ -233,6 +233,7 @@ impl Config {
             https_proxy: self.https_proxy.clone(),
             ports: (!self.ports.is_empty()).then(|| self.ports.clone()),
             docker_image: self.docker_image.clone(),
+            image_id: None,
             agent_name: self.agent_name.clone(),
             kvm: self.kvm,
             memory: self.memory.clone(),

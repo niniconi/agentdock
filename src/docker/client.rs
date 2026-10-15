@@ -240,10 +240,43 @@ fn image_config_once(image: &str) -> Result<ImageConfig> {
 }
 
 impl DockerClient {
-    fn pull(image: &str) -> Result<()> {
+    /// Fetch `image` from its registry, replacing the local tag if it moved.
+    ///
+    /// `docker run` never does this on its own: it uses whatever the tag already
+    /// points at locally, so without an explicit pull a rebuilt `:latest` would
+    /// never reach an existing container. `update` is the caller that needs it.
+    pub fn pull(image: &str) -> Result<()> {
         let output = docker(&["pull", image])?;
         check("pull image", &output)
     }
+
+    /// The immutable identity of the image a tag now points at, a `sha256:` id.
+    ///
+    /// Distinct from the tag: the tag is a movable name, this is the content it
+    /// currently resolves to. `update` compares it against the id a container
+    /// was built from to tell whether anything actually changed.
+    pub fn image_id(image: &str) -> Result<String> {
+        let output = docker(&["image", "inspect", "-f", "{{.Id}}", image])?;
+
+        if !output.status.success() {
+            bail!(ContainerError::ImageInspectFailed {
+                image: image.to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            });
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+}
+
+/// An image id in the short form docker itself prints, `sha256:` dropped and cut
+/// to twelve hex characters. Used wherever an id is shown to a person.
+pub fn short_image_id(id: &str) -> String {
+    id.strip_prefix("sha256:")
+        .unwrap_or(id)
+        .chars()
+        .take(12)
+        .collect()
 }
 
 /// An image's `.Config`, as far as agentdock cares.
@@ -319,5 +352,22 @@ mod tests {
         let cfg: ImageConfig = serde_json::from_str("{}").expect("parse");
         assert_eq!(cfg.user(), "");
         assert_eq!(cfg.env_home(), None);
+    }
+
+    #[test]
+    fn short_image_id_drops_the_algorithm_and_cuts_to_twelve() {
+        assert_eq!(
+            short_image_id(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            ),
+            "0123456789ab"
+        );
+        // docker's id always carries the prefix, but the cut is defined by length
+        // alone, so an unprefixed value is handled the same way rather than kept
+        // whole or lost.
+        assert_eq!(short_image_id("0123456789abcdef"), "0123456789ab");
+        // Shorter than twelve is returned as-is, not padded or emptied.
+        assert_eq!(short_image_id("sha256:abc"), "abc");
+        assert_eq!(short_image_id(""), "");
     }
 }

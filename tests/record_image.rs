@@ -33,6 +33,10 @@ fn exec_agent(log: &str) -> Option<String> {
         .and_then(|rest| rest.rsplit("sh -c ").next().map(|s| s.to_string()))
 }
 
+fn pulled(log: &str) -> bool {
+    log.contains("docker pull ")
+}
+
 fn assert_recorded(records: &str, image: &str, agent: &str) {
     assert!(
         records.contains(&format!("\"docker_image\": \"{}\"", image)),
@@ -280,5 +284,262 @@ fn template_copies_the_host_pi_config_into_a_run_that_does_not_persist_it() {
     assert!(
         !sb.persist_dir_for("box", "pi-agent", "config").exists(),
         "an unpersisted config must not be written under the data home"
+    );
+}
+
+/// `update` is the only path that pulls. It compares the image id the record
+/// holds against the one the tag now resolves to, and rebuilds because they
+/// differ.
+#[test]
+fn update_pulls_and_recreates_when_the_tag_moved() {
+    let mut sb = sandbox("update-rebuild");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    sb.set_image_id("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    sb.reset_log();
+
+    sb.run(&["update", "-n", "box"]);
+
+    let log = sb.log();
+    assert!(pulled(&log), "update must refresh the tag: {log}");
+    assert!(recreated(&log), "a moved tag must rebuild: {log}");
+    assert!(
+        sb.records().contains("sha256:bbbb"),
+        "the rebuilt record must carry the new image id: {}",
+        sb.records()
+    );
+}
+
+/// The whole point of comparing image ids rather than rebuilding blindly: an
+/// unchanged tag leaves the container's identity alone while still refreshing
+/// the image for the next apply.
+#[test]
+fn update_leaves_a_current_container_alone() {
+    let mut sb = sandbox("update-noop");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    sb.reset_log();
+
+    sb.run(&["update", "-n", "box"]);
+
+    let log = sb.log();
+    assert!(pulled(&log), "update still refreshes the tag: {log}");
+    assert!(
+        !recreated(&log),
+        "an unchanged image must not rebuild: {log}"
+    );
+    assert!(
+        exec_agent(&log).is_none(),
+        "update ensures the container is running, it does not attach the agent: {log}"
+    );
+}
+
+/// `update` is a maintenance command, so it leaves a rebuilt or current
+/// container in the same state `apply` does — running, agent not started. A
+/// stopped one is brought back up, but never attached.
+#[test]
+fn update_restarts_a_stopped_container_without_attaching_the_agent() {
+    let mut sb = sandbox("update-restart");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    // The container was stopped outside agentdock; the tag has not moved, so the
+    // no-op branch is the one that has to bring it back up.
+    std::fs::remove_file(&sb.running).expect("stop the container");
+    sb.reset_log();
+
+    sb.run(&["update", "-n", "box", "--no-pull"]);
+
+    let log = sb.log();
+    assert!(
+        log.contains("docker restart box"),
+        "a stopped container must be restarted: {log}"
+    );
+    assert!(
+        exec_agent(&log).is_none(),
+        "restarting must not attach the agent: {log}"
+    );
+}
+
+#[test]
+fn update_without_pull_uses_the_local_image() {
+    let mut sb = sandbox("update-nopull");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    sb.set_image_id("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+    sb.reset_log();
+
+    sb.run(&["update", "-n", "box", "--no-pull"]);
+
+    let log = sb.log();
+    assert!(!pulled(&log), "--no-pull must not pull: {log}");
+    assert!(
+        recreated(&log),
+        "the local tag moved, so it rebuilds: {log}"
+    );
+}
+
+#[test]
+fn update_dry_run_reports_without_recreating() {
+    let mut sb = sandbox("update-dry");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    sb.set_image_id("sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+    sb.reset_log();
+
+    let out = sb.run(&["update", "-n", "box", "--dry-run"]);
+
+    let log = sb.log();
+    assert!(
+        !recreated(&log),
+        "a dry run must not touch the container: {log}"
+    );
+    // A dry run still refreshes the tag unless `--no-pull` is given, because the
+    // id it reports is only known after the pull.
+    assert!(pulled(&log), "a dry run still pulls by default: {log}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("would be recreated"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    // Reporting must not move the record onto an id it did not rebuild onto.
+    assert!(
+        sb.records().contains("sha256:aaaa"),
+        "the dry run rewrote the record: {}",
+        sb.records()
+    );
+}
+
+/// A record written before `update` existed carries no image id. It cannot be
+/// shown to be current, so it is treated as out of date — the same branch a
+/// moved tag takes, reached from `None` rather than from a differing id.
+#[test]
+fn update_treats_a_record_without_an_image_id_as_out_of_date() {
+    let mut sb = sandbox("update-old-record");
+    sb.write_records(&format!(
+        r#"{{"records":{{"box":{{"path":"{mnt}","created_at":"2026-01-01T00:00:00+00:00","docker_image":"img","agent_name":"agent","kvm":false}}}}}}"#,
+        mnt = sb.mount().display()
+    ));
+    sb.mark_running();
+
+    let out = sb.run(&["update", "-n", "box", "--no-pull"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let log = sb.log();
+    assert!(
+        recreated(&log),
+        "a record with no image id must be rebuilt: {log}"
+    );
+    assert!(
+        sb.records().contains("sha256:aaaa"),
+        "the rebuild must record the current image id: {}",
+        sb.records()
+    );
+}
+
+/// A record whose container was removed outside agentdock cannot be updated,
+/// and must say so before it is touched — the same broken state `up` reports,
+/// not the `docker rm` error the rebuild path would otherwise surface.
+#[test]
+fn update_reports_a_missing_container_before_touching_it() {
+    let mut sb = sandbox("update-gone");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    // Repoint the tag so the rebuild branch would be the one taken, then remove
+    // the container: without the check the rebuild's destroy is what would fail.
+    sb.set_image_id("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    sb.set_container_gone();
+    sb.reset_log();
+
+    let out = sb.run(&["update", "-n", "box", "--no-pull"]);
+    assert!(
+        !out.status.success(),
+        "updating a container that no longer exists must fail"
+    );
+
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("does not exist"), "unfriendly error: {err}");
+
+    let log = sb.log();
+    assert!(
+        !log.contains("docker rm"),
+        "a missing container must not be destroyed: {log}"
+    );
+    assert!(
+        !recreated(&log),
+        "a missing container must not be recreated: {log}"
+    );
+}
+
+/// The pull happens before the destroy, so a registry that refuses the image
+/// leaves the container it could not replace untouched rather than deleted.
+#[test]
+fn update_does_not_touch_the_container_when_the_pull_fails() {
+    let mut sb = sandbox("update-pull-fail");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    sb.reset_log();
+    sb.set_pull_failure();
+
+    let out = sb.run(&["update", "-n", "box"]);
+    assert!(!out.status.success(), "a failed pull must fail the update");
+
+    let log = sb.log();
+    assert!(pulled(&log), "the pull was attempted: {log}");
+    assert!(
+        !recreated(&log),
+        "a failed pull must not destroy the container: {log}"
+    );
+}
+
+/// With no `-n`, `update` finds its container by directory the same way `up`
+/// does, so a bare call from the mounted directory locates it.
+#[test]
+fn update_locates_the_container_by_path() {
+    let mut sb = sandbox("update-path");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    sb.set_image_id("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    sb.reset_log();
+
+    let mount = sb.mount().display().to_string();
+    let out = sb.run(&["update", "--path", &mount, "--no-pull"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        recreated(&sb.log()),
+        "update should have found the container by path: {}",
+        sb.log()
+    );
+}
+
+/// The update rebuild passes no `--init`, so the recorded script has to come
+/// back from the record. Passing `None` through would silently erase it.
+#[test]
+fn update_keeps_the_recorded_init_script() {
+    let mut sb = sandbox("update-init");
+    std::fs::write(sb.mount().join("setup.sh"), "echo from-init\n").expect("write init");
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/agent",
+        "-n",
+        "box",
+        "--init",
+        "setup.sh",
+    ]);
+    assert!(sb.records().contains("echo from-init"), "{}", sb.records());
+
+    sb.set_image_id("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+    sb.reset_log();
+    sb.run(&["update", "-n", "box", "--no-pull"]);
+
+    assert!(
+        sb.records().contains("echo from-init"),
+        "update dropped the init script: {}",
+        sb.records()
+    );
+    assert!(
+        sb.log().contains("chmod +x /tmp/init.sh && /tmp/init.sh"),
+        "the init script was not re-run on the rebuilt container: {}",
+        sb.log()
     );
 }

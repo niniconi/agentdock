@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 
 use crate::cli::StatusArgs;
-use crate::docker::{ContainerStatus, DockerClient};
+use crate::docker::{ContainerStatus, DockerClient, short_image_id};
 use crate::error::ContainerError;
 use crate::state::StateManager;
 
@@ -25,6 +25,10 @@ pub fn execute_status(args: StatusArgs) -> Result<()> {
 
     println!("Container:    {}", args.name);
     println!("Status:       {}", status_str);
+    println!("Image:        {}", record.docker_image);
+    if let Some(id) = &record.image_id {
+        println!("Image ID:     {}", short_image_id(id));
+    }
     println!("Path:         {}", record.path.display());
     println!("Created:      {}", record.created_at);
 

@@ -199,6 +199,16 @@ Suggested actions:
     NotManaged { name: String, flag: String },
 
     #[error(
+        "No container is managed {name}
+
+This command rebuilds the image of a container agentdock already recorded; it does not create one.
+
+Suggested actions:
+  - agentdock apply{flag}     # create it from the flags you want"
+    )]
+    NotManagedForUpdate { name: String, flag: String },
+
+    #[error(
         "Container '{name}' is running.
 
 Suggested actions:

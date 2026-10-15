@@ -59,7 +59,7 @@ Neither is checked up front, so a missing tool surfaces late, but both now repor
 name (`docker is not installed or not on PATH`) rather than a bare OS error.
 
 - **`git` must be on PATH** for the `worktree` subcommand and for the integration suite.
-- **`docker` must be on PATH** for `apply`/`up`/`list`/`delete`/`status`. Without it, `apply`
+- **`docker` must be on PATH** for `apply`/`up`/`update`/`list`/`delete`/`status`. Without it, `apply`
   prints `Creating container: ...` and then fails with
   `docker is not installed or not on PATH`. Records are written only after the container
   starts, so a failure here leaves no stale state.
@@ -119,6 +119,17 @@ API. Most are `pub` only to cross module boundaries.
   configuration, so a comparison would have nothing to decide. `apply` always rebuilds for that
   reason, and `up` carries no configuration flags, which is what keeps a bare `up` from
   rebuilding anything.
+- `update` in `src/commands/update.rs` is the one path that pulls. It takes its configuration
+  from the record (`Config::of`), so the ports, environment, init script and persisted
+  directories are kept without the flags being repeated, and it recreates only when the image
+  actually moved. The comparison is `Record.image_id` against `DockerClient::image_id`: the
+  record stores the `sha256:` id captured at create/replace time, so a tag that was repointed
+  without the reference changing is detected, and a record written before `update` existed
+  (no `image_id`) is treated as out of date. `container::read_init` takes `config.init_content`
+  as a fallback for exactly this path: `update` passes no `--init`, and without the fallback a
+  rebuild would drop the script from the record. `--template` is deliberately not recorded;
+  because persisted directories are served by mounts, only an unpersisted `--template` copy is
+  lost on a rebuild, which is accepted.
 - `src/docker/client.rs` shells out to `docker`. Note the one exception: `exec` runs
   `docker exec -it <name> sh -c <command>`, and `container.rs` passes the agent name from
   `-a {image}/{agent_name}` into that shell, so a crafted agent name is interpreted by the

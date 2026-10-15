@@ -14,6 +14,9 @@ pub enum Commands {
     Apply(Box<ApplyArgs>),
     /// Start an existing container without changing how it was built
     Up(UpArgs),
+    /// Move an existing container onto the image its tag now points at,
+    /// keeping the configuration it was created with
+    Update(UpdateArgs),
     /// List all managed containers
     List(ListArgs),
     /// Delete a container and its record
@@ -146,6 +149,36 @@ pub struct UpArgs {
 }
 
 impl UpArgs {
+    pub fn get_mount_path(&self) -> PathBuf {
+        self.path
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().expect("Failed to get current directory"))
+    }
+}
+
+#[derive(Parser)]
+pub struct UpdateArgs {
+    /// Host mount directory (default: current directory)
+    #[arg(short, long)]
+    pub path: Option<PathBuf>,
+
+    /// Record identifier name
+    #[arg(short, long)]
+    pub name: Option<String>,
+
+    /// Recreate from the local image without pulling the tag first
+    #[arg(long)]
+    pub no_pull: bool,
+
+    /// Report what would change without recreating the container
+    ///
+    /// Still pulls unless --no-pull is also given: whether the tag has moved
+    /// cannot be known without resolving it.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+impl UpdateArgs {
     pub fn get_mount_path(&self) -> PathBuf {
         self.path
             .clone()

@@ -30,6 +30,14 @@ pub struct Record {
     pub cpus: Option<String>,
     /// Image the container was created from.
     pub docker_image: String,
+    /// Immutable identity of the image the container was built from, as docker
+    /// reports it: a `sha256:` image id. The tag in `docker_image` can be
+    /// repointed at a newer build without the reference changing, so this is
+    /// what `update` compares to decide whether the container is already on the
+    /// current image. Optional and defaulted because records written before
+    /// `update` existed have no id; those are treated as out of date.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub image_id: Option<String>,
     /// Agent executable passed to `docker exec`.
     pub agent_name: String,
     /// Whether /dev/kvm was mapped in. `docker run` consumes it, so without

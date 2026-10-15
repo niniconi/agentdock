@@ -31,6 +31,8 @@ pub struct Sandbox {
     pub mode: DockerMode,
     pub log: PathBuf,
     pub running: PathBuf,
+    pull_fail: PathBuf,
+    gone: PathBuf,
     containers: Vec<String>,
 }
 
@@ -57,24 +59,38 @@ impl Sandbox {
 
         let log = root.join("docker.log");
         let running = root.join("running");
+        let pull_fail = root.join("pull_fail");
+        let gone = root.join("gone");
         let env_file = root.join("image_env");
+        let id_file = root.join("image_id");
         std::fs::write(&env_file, "{}\n").expect("write image env");
+        // A stable id by default, so `update` sees an unchanged tag until a test
+        // repoints it with `set_image_id`.
+        std::fs::write(
+            &id_file,
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        )
+        .expect("write image id");
 
         if mode == DockerMode::Stub {
             let stub = format!(
                 "#!/bin/sh\n\
                  echo \"docker $*\" >> \"{log}\"\n\
                  case \"$1 $2\" in\n\
-                 'image inspect') cat \"{env_file}\" ;;\n\
+                 'image inspect') if [ \"$4\" = \"{{{{.Id}}}}\" ]; then cat \"{id_file}\"; else cat \"{env_file}\"; fi ;;\n\
                  esac\n\
                  case \"$1\" in\n\
-                 inspect) if [ -f \"{running}\" ]; then echo true; else echo false; fi ;;\n\
+                 inspect) if [ -f \"{gone}\" ]; then exit 1; fi; if [ -f \"{running}\" ]; then echo true; else echo false; fi ;;\n\
                  run) shift; while [ $# -gt 0 ]; do case \"$1\" in -d) touch \"{running}\"; exit 0;; esac; shift; done; exit 0 ;;\n\
+                 pull) if [ -f \"{pull_fail}\" ]; then echo 'pull access denied' >&2; exit 1; fi; exit 0 ;;\n\
                  *) exit 0 ;;\n\
                  esac\n",
                 log = log.display(),
                 running = running.display(),
-                env_file = env_file.display()
+                pull_fail = pull_fail.display(),
+                gone = gone.display(),
+                env_file = env_file.display(),
+                id_file = id_file.display()
             );
             let stub_path = root.join("bin/docker");
             std::fs::write(&stub_path, stub).expect("write stub");
@@ -91,6 +107,8 @@ impl Sandbox {
             mode,
             log,
             running,
+            pull_fail,
+            gone,
             containers: Vec::new(),
         })
     }
@@ -123,6 +141,26 @@ impl Sandbox {
 
     pub fn set_image_config(&self, json: &str) {
         std::fs::write(self.root.join("image_env"), format!("{json}\n")).expect("write env");
+    }
+
+    /// Repoint the image id the stub reports for `docker image inspect {{.Id}}`.
+    /// A different value stands for a tag that now resolves to a newer build.
+    pub fn set_image_id(&self, id: &str) {
+        std::fs::write(self.root.join("image_id"), format!("{id}\n")).expect("write image id");
+    }
+
+    /// Make the stub's next `docker pull` fail, the way a registry rejecting an
+    /// unknown image does. Used to assert `update` does not destroy a container
+    /// when it cannot fetch a replacement.
+    pub fn set_pull_failure(&self) {
+        std::fs::write(&self.pull_fail, "").expect("write pull failure marker");
+    }
+
+    /// Make the stub's `docker inspect` fail for any container, the way one
+    /// removed outside agentdock does. Used to assert `update` reports a missing
+    /// container the same way `up` does, before it touches it.
+    pub fn set_container_gone(&self) {
+        std::fs::write(&self.gone, "").expect("write gone marker");
     }
 
     pub fn persist_dir(&self, container: &str, kind: &str) -> PathBuf {
