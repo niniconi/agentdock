@@ -144,14 +144,22 @@ API. Most are `pub` only to cross module boundaries.
   on the agent named in `-a`: every entry is mounted for every container. Keying on the image
   put `nixos`, `nixos:latest` and `ghcr.io/owner/nixos` in separate arms, so pinning a tag meant
   editing the table; and keying on `-a` would refuse persistence to a container entered with
-  `bash`, which is one whose agent has not been started yet.
-  `--template` also lives here, split along the same persisted/unpersisted line. When config
-  is persisted, `plan_mounts` seeds the per-container host directory from
-  `<XDG_CONFIG_HOME|~/.config>/opencode` the one time it is created (`seed_config_dir`,
-  skip-existing); when config is not persisted there is no host directory to serve, so
-  `template_into_container` copies the same source into the container with
-  `docker exec mkdir -p` + `docker cp <src>/. <name>:<dest>` on every apply, overwriting. A
-  missing host directory is not an error in either path. Both are gated on `Config.template`;
+  `bash`, which is one whose agent has not been started yet. An agent that keeps config and
+  sessions in one place contributes one config entry and no data entry — that is `pi-agent`,
+  whose whole world is `~/.pi/agent` — so `--persist data` mounts nothing extra for it, while
+  the host leaf is still `<container>/pi-agent/config`.
+  `--template` also lives here, split along the same persisted/unpersisted line, and its source
+  is per agent: `host_template_source` maps `opencode` to
+  `<XDG_CONFIG_HOME|~/.config>/opencode` and `pi-agent` to `pi_agent_dir`, which is
+  `PI_CODING_AGENT_DIR` when it names an absolute path and `~/.pi/agent` otherwise, because Pi
+  reads no XDG variable at all. When config is persisted, `plan_mounts` resolves that per
+  config directory and seeds it the one time it is created (`seed_config_dir`, skip-existing);
+  when config is not persisted there is no host directory to serve, so
+  `template_into_container` makes the same lookup once per config entry and copies each source
+  into the container with `docker exec mkdir -p` + `docker cp <src>/. <name>:<dest>` on every
+  apply, overwriting. Resolving per agent is what keeps opencode's config out of
+  `.../pi-agent/config`: a single source resolved for the whole container would seed both.
+  A missing host directory is not an error in either path. Both are gated on `Config.template`;
   the caller picks between them by `Config::persists`, not by probing the mounts.
 - `src/worktree/` is the `worktree` subcommand, where `git.rs` is a thin `git` CLI wrapper and
   `mod.rs` holds orchestration.

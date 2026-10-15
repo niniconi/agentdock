@@ -36,13 +36,17 @@ fn destinations(name: &str) -> String {
     dests.join(" ")
 }
 
-fn persist_dir(sandbox: &Sandbox, name: &str, kind: &str) -> PathBuf {
+fn agent_persist_dir(sandbox: &Sandbox, name: &str, agent: &str, kind: &str) -> PathBuf {
     sandbox
         .root
         .join("home/.local/share/agentdock")
         .join(name)
-        .join("opencode")
+        .join(agent)
         .join(kind)
+}
+
+fn persist_dir(sandbox: &Sandbox, name: &str, kind: &str) -> PathBuf {
+    agent_persist_dir(sandbox, name, "opencode", kind)
 }
 
 #[test]
@@ -231,7 +235,7 @@ fn up_does_not_demand_a_tty() {
 }
 
 #[test]
-fn persist_mounts_both_directories_under_root() {
+fn persist_mounts_every_supported_directory_under_root() {
     let Some(mut s) = sb("persist-both") else {
         return;
     };
@@ -248,6 +252,7 @@ fn persist_mounts_both_directories_under_root() {
     let dests = destinations("real-persist");
     assert!(dests.contains("/root/.config/opencode"), "{dests}");
     assert!(dests.contains("/root/.local/share/opencode"), "{dests}");
+    assert!(dests.contains("/root/.pi/agent"), "{dests}");
 }
 
 #[test]
@@ -268,10 +273,14 @@ fn persist_creates_the_host_directories() {
     for kind in ["config", "data"] {
         assert!(persist_dir(&s, "real-persistdir", kind).is_dir(), "{kind}");
     }
+    assert!(
+        agent_persist_dir(&s, "real-persistdir", "pi-agent", "config").is_dir(),
+        "pi-agent's own directory"
+    );
 }
 
 #[test]
-fn persist_config_alone_mounts_one_directory() {
+fn persist_config_alone_mounts_no_data_directory() {
     let Some(mut s) = sb("persist-cfg") else {
         return;
     };
@@ -288,11 +297,12 @@ fn persist_config_alone_mounts_one_directory() {
 
     let dests = destinations("real-persistcfg");
     assert!(dests.contains("/root/.config/opencode"), "{dests}");
+    assert!(dests.contains("/root/.pi/agent"), "{dests}");
     assert!(!dests.contains(".local/share/opencode"), "{dests}");
 }
 
 #[test]
-fn persist_data_alone_mounts_one_directory() {
+fn persist_data_alone_mounts_no_config_directory() {
     let Some(mut s) = sb("persist-data") else {
         return;
     };
@@ -310,6 +320,9 @@ fn persist_data_alone_mounts_one_directory() {
     let dests = destinations("real-persistdata");
     assert!(dests.contains("/root/.local/share/opencode"), "{dests}");
     assert!(!dests.contains(".config/opencode"), "{dests}");
+    // pi-agent contributes a config directory and no data directory, so it is
+    // half of `config` and never half of `data`.
+    assert!(!dests.contains(".pi/agent"), "{dests}");
 }
 
 #[test]
@@ -323,6 +336,7 @@ fn omitting_persist_mounts_nothing_extra() {
     let dests = destinations("real-barepersist");
     assert!(dests.contains("/workspace"), "{dests}");
     assert!(!dests.contains("opencode"), "{dests}");
+    assert!(!dests.contains(".pi/agent"), "{dests}");
 }
 
 #[test]
@@ -343,6 +357,7 @@ fn a_bare_apply_drops_a_previously_persisted_mount() {
 
     let dests = destinations("real-persistdrop");
     assert!(!dests.contains("opencode"), "{dests}");
+    assert!(!dests.contains(".pi/agent"), "{dests}");
     assert!(!s.records().contains("\"persist\""), "{}", s.records());
 }
 
@@ -740,5 +755,173 @@ fn without_template_the_container_has_no_host_config() {
     assert_eq!(
         present, "no",
         "the host template leaked in without --template"
+    );
+}
+
+#[test]
+fn pi_agent_config_mounts_on_a_real_daemon() {
+    let Some(mut s) = sb("pi-mount") else { return };
+    s.track("real-pimount");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-pimount",
+        "--persist",
+        "config",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let dests = destinations("real-pimount");
+    assert!(dests.contains("/root/.pi/agent"), "{dests}");
+    assert!(dests.contains("/root/.config/opencode"), "{dests}");
+
+    let host = agent_persist_dir(&s, "real-pimount", "pi-agent", "config");
+    assert!(host.is_dir(), "the host directory was not created");
+
+    // Pi reads and writes this path, so the mount has to be the agent's own and
+    // not a second copy of opencode's layout.
+    docker(&[
+        "exec",
+        "real-pimount",
+        "sh",
+        "-c",
+        "echo ok > /root/.pi/agent/marker",
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(host.join("marker"))
+            .unwrap_or_default()
+            .trim(),
+        "ok",
+        "writes through the pi-agent mount did not reach the host"
+    );
+}
+
+#[test]
+fn template_seeds_pi_agent_config_on_a_real_daemon() {
+    let Some(mut s) = sb("pi-tmpl") else { return };
+    s.track("real-pitmpl");
+    let pi = s.host_pi_agent_dir();
+    std::fs::create_dir_all(&pi).expect("template dir");
+    std::fs::write(pi.join("settings.json"), "from-host").expect("template file");
+
+    // Seed opencode's own host directory too, so the isolation check below is a
+    // real cross-contamination test: without it, "opencode.json is absent from
+    // pi's directory" would hold even if one source fed both directories.
+    let oc = s.host_config_dir();
+    std::fs::create_dir_all(&oc).expect("opencode template dir");
+    std::fs::write(oc.join("opencode.json"), "opencode-from-host").expect("opencode template file");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-pitmpl",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-pitmpl",
+            "cat",
+            "/root/.pi/agent/settings.json"
+        ]),
+        "from-host",
+        "pi-agent's template was not seeded into the container"
+    );
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-pitmpl",
+            "cat",
+            "/root/.config/opencode/opencode.json"
+        ]),
+        "opencode-from-host",
+        "opencode's template did not land in its own directory"
+    );
+    // Each agent seeds from its own host directory, so opencode's file must not
+    // follow pi's into pi-agent's directory.
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-pitmpl",
+            "sh",
+            "-c",
+            "test -e /root/.pi/agent/opencode.json && echo yes || echo no",
+        ]),
+        "no",
+        "opencode's config was seeded into pi-agent's directory"
+    );
+
+    // Seeding is a first-creation event, the same as opencode's: an edit made
+    // through the mount survives a reapply.
+    docker(&[
+        "exec",
+        "real-pitmpl",
+        "sh",
+        "-c",
+        "echo edited > /root/.pi/agent/settings.json",
+    ]);
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-pitmpl",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-pitmpl",
+            "cat",
+            "/root/.pi/agent/settings.json"
+        ]),
+        "edited",
+        "a reapply re-seeded an existing config directory"
+    );
+}
+
+#[test]
+fn template_copies_pi_agent_config_into_an_unpersisted_container() {
+    let Some(mut s) = sb("pi-copy") else { return };
+    s.track("real-picopy");
+    let pi = s.host_pi_agent_dir();
+    std::fs::create_dir_all(&pi).expect("template dir");
+    std::fs::write(pi.join("settings.json"), "from-host").expect("template file");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-picopy",
+        "--template",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-picopy",
+            "cat",
+            "/root/.pi/agent/settings.json"
+        ]),
+        "from-host",
+        "the copied template is not visible in the container"
+    );
+    assert!(
+        !agent_persist_dir(&s, "real-picopy", "pi-agent", "config").exists(),
+        "an unpersisted config must not be written under the data home"
     );
 }

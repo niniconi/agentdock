@@ -66,12 +66,16 @@ agentdock apply -a nixos/bash     --persist              # 同一份数据，换
     opencode/
       config/
       data/
+    pi-agent/
+      config/
 ```
 
 agentdock 知道的每一个目录都会挂进每一个容器，与 `-a` 写的是什么 agent 无关。
 那个 flag 决定的是入口程序而不是数据归属：一个用 `bash` 进去的容器，往往是它的
 agent 还没启动过，所以无论如何都挂 `opencode` 的目录，你才能进去看到那份数据。
-新增一个 agent 是在 `src/persist.rs` 里每个目录写一行。
+新增一个 agent 是在 `src/persist.rs` 里每个目录写一行。`pi-agent` 只占一行而不是
+两行，因为它把配置和会话历史一起放在 `~/.pi/agent` 里，没有单独的 data 目录可挂，
+`--persist data` 对它也就不会多出任何东西。
 
 容器内的路径由镜像决定，因为 agentdock 必须给出一个绝对路径，而只有镜像知道自己
 以哪个用户运行。镜像没有 `USER` 声明时以 root 运行，home 就是 `/root`；否则用镜像
@@ -95,18 +99,21 @@ agentdock delete box --force --purge  # 一并删除
 
 ### 用你自己的配置给容器做模板
 
-`--template` 会把宿主机的 `~/.config/opencode` 当作起点，新建的容器就自带你的
+`--template` 会把宿主机上你自己的 agent 配置目录当作起点，新建的容器就自带你的
 MCP 和 skills，不必再装一遍：
 
 ```bash
 agentdock apply -a nixos/opencode --persist --template
 ```
 
-当 config 被持久化时，每个容器的 config 目录在第一次创建时会从宿主机目录种入。
-已经存在的文件不动，所以只种一次，之后 agent 自己写的内容会保留。当 config 没被
-持久化时，容器看不到宿主机目录，于是每次 apply 都把宿主机配置直接复制进容器 ——
-反正它随容器一起丢弃。两种情况里，如果你没有 `~/.config/opencode`，这个 flag
-什么都不做。
+每个 agent 读自己的目录：opencode 用 `~/.config/opencode`（或 `$XDG_CONFIG_HOME/opencode`），
+Pi 用你设过的 `$PI_CODING_AGENT_DIR`，没设就是 `~/.pi/agent` —— Pi 根本不读任何 XDG 变量。
+
+当 config 被持久化时，每个容器的 config 目录在第一次创建时会从它自己对应的宿主机
+目录种入。已经存在的文件不动，所以只种一次，之后 agent 自己写的内容会保留。当 config
+没被持久化时，容器看不到宿主机目录，于是每次 apply 都把每个宿主机配置目录分别复制进
+容器 —— 反正它随容器一起丢弃。两种情况里，如果你没有那个宿主机目录，这个 flag 对
+那个 agent 就什么都不做。
 
 ## Worktree
 

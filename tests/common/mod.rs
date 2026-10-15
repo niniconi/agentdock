@@ -99,9 +99,16 @@ impl Sandbox {
         self.root.join("mnt")
     }
 
-    /// The host's own agent config directory, the source `--template` reads.
+    /// The host's own agent config directory, the source `--template` reads for
+    /// opencode.
     pub fn host_config_dir(&self) -> PathBuf {
         self.root.join("home/.config/opencode")
+    }
+
+    /// The host's own Pi agent directory, the source `--template` reads for
+    /// pi-agent. Pi ignores XDG, so this hangs off HOME alone.
+    pub fn host_pi_agent_dir(&self) -> PathBuf {
+        self.root.join("home/.pi/agent")
     }
 
     pub fn records(&self) -> String {
@@ -162,16 +169,20 @@ impl Sandbox {
             path.push_str(&existing);
         }
 
-        // The sandbox owns the whole XDG environment, not just HOME. CI images
-        // bake XDG_CONFIG_HOME into /etc/environment pointing at the runner's
-        // own home, so leaving it alone would read a config that exists nowhere
-        // in the sandbox. The pinned values equal the binary's own fallbacks,
-        // so a bare HOME-only environment still resolves to the same paths.
+        // The sandbox owns the whole environment the binary resolves paths from,
+        // not just HOME. CI images bake XDG_CONFIG_HOME into /etc/environment
+        // pointing at the runner's own home, so leaving it alone would read a
+        // config that exists nowhere in the sandbox; PI_CODING_AGENT_DIR is
+        // pinned for the same reason, since a leaked one would move Pi's source
+        // out from under the test. The pinned values equal the binary's own
+        // defaults, so a bare HOME-only environment still resolves to the same
+        // paths.
         Command::new(env!("CARGO_BIN_EXE_agentdock"))
             .current_dir(self.mount())
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("home/.config"))
             .env("XDG_DATA_HOME", self.root.join("home/.local/share"))
+            .env("PI_CODING_AGENT_DIR", self.root.join("home/.pi/agent"))
             .env("PATH", path)
             .args(args)
             .output()

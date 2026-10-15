@@ -72,6 +72,8 @@ never write the same database:
     opencode/
       config/
       data/
+    pi-agent/
+      config/
 ```
 
 Every directory agentdock knows about is mounted for every container, whichever
@@ -79,7 +81,9 @@ agent `-a` names. That flag picks the entry point rather than the owner: a
 container entered with `bash` is one whose agent you have not started yet, so
 mounting for `opencode` regardless is what lets you look inside it and find the
 data still there. Adding an agent means one line in `src/persist.rs` per
-directory it keeps.
+directory it keeps. `pi-agent` is one line rather than two because it keeps its
+config and its session history together in `~/.pi/agent`, so there is no separate
+data directory to mount and `--persist data` adds nothing extra for it.
 
 Inside the container the paths follow from the image, since agentdock has to
 name an absolute path and only the image knows which user it runs as. An image
@@ -107,20 +111,25 @@ container.
 
 ### Seeding a container from your own config
 
-`--template` uses your host `~/.config/opencode` as a starting point, so a fresh
-container already has your MCP servers and skills without installing them again:
+`--template` uses your host's own agent config directories as a starting point, so a
+fresh container already has your MCP servers and skills without installing them
+again:
 
 ```bash
 agentdock apply -a nixos/opencode --persist --template
 ```
 
-When config is persisted, the per-container config directory is seeded from the
-host directory the first time it is created. Files that are already there are
-left alone, so the seed happens once and whatever the agent writes afterwards
-survives. When config is not persisted there is no host directory for the
-container to see, so the host config is copied straight into the container on
-every apply — it is discarded with the container anyway. Either way, if you have
-no `~/.config/opencode`, the flag simply does nothing.
+Each agent reads its own directory: opencode takes `~/.config/opencode` (or
+`$XDG_CONFIG_HOME/opencode`), and Pi takes `$PI_CODING_AGENT_DIR` if you set one and
+`~/.pi/agent` otherwise, since Pi reads no XDG variable at all.
+
+When config is persisted, each per-container config directory is seeded from its own
+host directory the first time it is created. Files that are already there are left
+alone, so the seed happens once and whatever the agent writes afterwards survives.
+When config is not persisted there is no host directory for the container to see, so
+each host directory is copied straight into the container on every apply — it is
+discarded with the container anyway. Either way, if you have no such directory, the
+flag simply does nothing for that agent.
 
 ## Worktrees
 

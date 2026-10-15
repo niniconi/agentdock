@@ -80,11 +80,12 @@ pub struct ApplyOpts {
     #[arg(long, value_name = "N")]
     pub cpus: Option<String>,
 
-    /// Persist opencode's config and data directories under
-    /// ~/.local/share/agentdock/<container>/opencode/
+    /// Persist the supported agents' directories under
+    /// ~/.local/share/agentdock/<container>/<agent>/
     ///
     /// Bare --persist persists both. Name one to persist only that half:
-    /// --persist config, or --persist data. The container-side paths are
+    /// --persist config, or --persist data. opencode contributes config and
+    /// data, pi-agent contributes config only. The container-side paths are
     /// derived from the image's default user, not asked for.
     ///
     /// Omitted means nothing is persisted.
@@ -98,14 +99,15 @@ pub struct ApplyOpts {
     )]
     pub persist: Option<Vec<String>>,
 
-    /// Use the host's own ~/.config/opencode as a starting point.
+    /// Use the host's own agent config directories as a starting point
+    /// (~/.config/opencode, ~/.pi/agent).
     ///
-    /// When config is persisted, the per-container config directory is seeded
-    /// from it the first time that directory is created; existing files are
-    /// never overwritten. When config is not persisted, the host directory is
-    /// copied straight into the container on every apply, since the container's
-    /// own copy is discarded with it. The host directory is ignored when it
-    /// does not exist.
+    /// When config is persisted, each per-container config directory is seeded
+    /// from its own host directory the first time that directory is created;
+    /// existing files are never overwritten. When config is not persisted, the
+    /// host directories are copied straight into the container on every apply,
+    /// since the container's own copy is discarded with them. A host directory
+    /// that does not exist is ignored.
     #[arg(long)]
     pub template: bool,
 }

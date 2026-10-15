@@ -173,6 +173,28 @@ fn list_verbose_shows_the_ports_column() {
     assert!(stdout.contains("8080:80"), "{stdout}");
 }
 
+/// The PERSISTED column is derived from the same table the mounts are, so an
+/// agent added to it is reported without a second list to keep in step.
+#[test]
+fn list_verbose_reports_each_persisted_agent_directory() {
+    let mut sb = sandbox("list-persisted");
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/agent",
+        "-n",
+        "box",
+        "--persist",
+        "config",
+    ]);
+
+    let out = sb.run(&["list", "-v"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("box/opencode/config"), "{stdout}");
+    assert!(stdout.contains("box/pi-agent/config"), "{stdout}");
+    assert!(!stdout.contains("box/pi-agent/data"), "{stdout}");
+}
+
 #[test]
 fn apply_rejects_an_invalid_port() {
     let mut sb = sandbox("bad-port");
@@ -448,5 +470,185 @@ fn without_template_nothing_seeds_a_new_config_directory() {
     assert!(
         std::fs::read_dir(&cfg).unwrap().count() == 0,
         "the host template leaked in without --template"
+    );
+}
+
+/// Give the sandbox a host-side Pi config to use as a template.
+fn seed_host_pi_template(sb: &Sandbox) {
+    let tmpl = sb.host_pi_agent_dir();
+    std::fs::create_dir_all(tmpl.join("skills")).expect("template dir");
+    std::fs::write(tmpl.join("settings.json"), r#"{"model":"p"}"#).expect("template file");
+    std::fs::write(tmpl.join("skills/readme.md"), "pi-skill").expect("template file");
+}
+
+/// pi-agent is the default `-a`, and it contributes a config directory of its
+/// own that opencode's row does not cover.
+#[test]
+fn pi_agent_config_is_mounted_alongside_opencode_s() {
+    let mut sb = sandbox("pi-mount");
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/agent",
+        "-n",
+        "box",
+        "--persist",
+        "config",
+    ]);
+
+    let log = sb.log();
+    assert!(
+        log.contains(&format!(
+            "-v {}:/root/.pi/agent",
+            sb.persist_dir_for("box", "pi-agent", "config").display()
+        )),
+        "pi-agent's config is missing: {log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "-v {}:/root/.config/opencode",
+            sb.persist_dir("box", "config").display()
+        )),
+        "opencode's config should still be mounted: {log}"
+    );
+}
+
+/// Pi keeps its sessions inside `~/.pi/agent`, so it has no data directory to
+/// contribute and `--persist data` must not invent one.
+#[test]
+fn persist_data_mounts_no_pi_agent_directory() {
+    let mut sb = sandbox("pi-data");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box", "--persist", "data"]);
+
+    let log = sb.log();
+    assert!(
+        log.contains(&format!(
+            "-v {}:/root/.local/share/opencode",
+            sb.persist_dir("box", "data").display()
+        )),
+        "opencode's data should be mounted: {log}"
+    );
+    assert!(
+        !log.contains(":/root/.pi/agent"),
+        "pi-agent has no data directory to persist: {log}"
+    );
+}
+
+/// The whole point of resolving the template source per agent: each host config
+/// has to land in its own per-container directory, and neither may appear in the
+/// other's.
+#[test]
+fn template_seeds_each_agent_from_its_own_host_directory() {
+    let mut sb = sandbox("pi-seed");
+    seed_host_template(&sb);
+    seed_host_pi_template(&sb);
+
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/agent",
+        "-n",
+        "box",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+
+    let opencode = sb.persist_dir("box", "config");
+    let pi = sb.persist_dir_for("box", "pi-agent", "config");
+    assert_eq!(
+        std::fs::read_to_string(opencode.join("opencode.json")).unwrap(),
+        r#"{"mcp":{}}"#
+    );
+    assert_eq!(
+        std::fs::read_to_string(pi.join("settings.json")).unwrap(),
+        r#"{"model":"p"}"#,
+        "pi-agent's own config was not seeded"
+    );
+    assert!(
+        !pi.join("opencode.json").exists(),
+        "opencode's config was seeded into pi-agent's directory"
+    );
+    assert!(
+        !opencode.join("settings.json").exists(),
+        "pi-agent's config was seeded into opencode's directory"
+    );
+}
+
+/// The copy path, taken for a run that does not persist config: one `docker cp`
+/// per supported agent whose host directory exists, each to its own target.
+#[test]
+fn template_copies_each_agent_directory_into_a_run_that_does_not_persist_it() {
+    let mut sb = sandbox("pi-copy");
+    seed_host_template(&sb);
+    seed_host_pi_template(&sb);
+
+    sb.run(&["apply", "-a", "img/agent", "-n", "box", "--template"]);
+
+    let log = sb.log();
+    assert!(
+        log.contains("docker exec box sh -c mkdir -p /root/.pi/agent"),
+        "the target directory must exist before the copy: {log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "docker cp {}/. box:/root/.pi/agent",
+            sb.host_pi_agent_dir().display()
+        )),
+        "pi-agent's config was not copied in: {log}"
+    );
+    assert!(
+        !sb.persist_dir_for("box", "pi-agent", "config").exists(),
+        "an unpersisted config must not be written under the data home"
+    );
+}
+
+/// `--persist data` leaves the config directory unpersisted, so `--template`
+/// takes the copy path for every agent — pi-agent included, since config is its
+/// only directory. A data-only run must not skip the config templates, and it
+/// must not create pi-agent's config under the data home either.
+#[test]
+fn template_copies_config_for_a_run_that_persists_only_data() {
+    let mut sb = sandbox("pi-data-template");
+    seed_host_pi_template(&sb);
+
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/agent",
+        "-n",
+        "box",
+        "--persist",
+        "data",
+        "--template",
+    ]);
+
+    let log = sb.log();
+    assert!(
+        log.contains(&format!(
+            "docker cp {}/. box:/root/.pi/agent",
+            sb.host_pi_agent_dir().display()
+        )),
+        "pi-agent's config must still be copied when only data is persisted: {log}"
+    );
+    assert!(
+        !sb.persist_dir_for("box", "pi-agent", "config").exists(),
+        "a data-only run must not create pi-agent's config under the data home"
+    );
+}
+
+/// A host Pi config that exists must stay out of the container when `--template`
+/// is absent, the same guarantee opencode's directory has.
+#[test]
+fn without_template_no_pi_agent_directory_is_copied_in() {
+    let mut sb = sandbox("pi-no-template");
+    seed_host_pi_template(&sb);
+
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+
+    assert!(
+        !sb.log().contains("box:/root/.pi/agent"),
+        "the host Pi config leaked in without --template: {}",
+        sb.log()
     );
 }

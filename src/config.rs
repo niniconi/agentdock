@@ -160,11 +160,11 @@ pub struct Config {
     pub https_proxy: Option<String>,
     pub init_content: Option<String>,
     pub kvm: bool,
-    /// Which of opencode's directories to mount in, if any. `None` is the
-    /// flag being left out, which means nothing is persisted.
+    /// Which kinds of directory to mount in, if any. `None` is the flag being
+    /// left out, which means nothing is persisted.
     pub persist: Option<Vec<Persist>>,
-    /// Seed the container's config from the host's ~/.config/opencode. See
-    /// `--template`.
+    /// Seed each per-container config directory from that agent's own host
+    /// config directory. See `--template`.
     pub template: bool,
     /// Environment variables passed to the container as `-e KEY=VALUE`.
     /// Always a list. An empty one means none are set.

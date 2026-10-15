@@ -215,9 +215,70 @@ fn without_template_the_host_config_is_not_copied_in() {
 
     sb.run(&["apply", "-a", "img/opencode", "-n", "box"]);
 
+    let log = sb.log();
     assert!(
-        !sb.log().contains("docker cp"),
-        "the host template leaked in without --template: {}",
-        sb.log()
+        !log.contains("docker cp"),
+        "the host template leaked in without --template: {log}"
+    );
+    assert!(
+        !log.contains(":/root/.pi/agent"),
+        "a host Pi config must not reach the container without --template: {log}"
+    );
+}
+
+/// The pi-agent mount in full: the host leaf the record reports and the
+/// container-side path Pi reads, which is not the XGD layout opencode uses.
+#[test]
+fn a_persisted_pi_agent_config_is_mounted_at_its_own_path() {
+    let mut sb = sandbox("pi-mount");
+    sb.run(&[
+        "apply",
+        "-a",
+        "img/pi-agent",
+        "-n",
+        "box",
+        "--persist",
+        "config",
+    ]);
+
+    let log = sb.log();
+    let pi = sb.persist_dir_for("box", "pi-agent", "config");
+    assert!(
+        log.contains(&format!("-v {}:/root/.pi/agent", pi.display())),
+        "pi-agent's config mount is missing: {log}"
+    );
+    assert!(
+        log.contains(&format!(
+            "-v {}:/root/.config/opencode",
+            sb.persist_dir("box", "config").display()
+        )),
+        "opencode's config mount is missing: {log}"
+    );
+}
+
+/// The exact command sequence the copy path needs for Pi: `docker cp` copies a
+/// directory *into* a target rather than over it, so the target exists first and
+/// the copy names its contents.
+#[test]
+fn template_copies_the_host_pi_config_into_a_run_that_does_not_persist_it() {
+    let mut sb = sandbox("pi-copy");
+    let pi = sb.host_pi_agent_dir();
+    std::fs::create_dir_all(&pi).expect("template dir");
+    std::fs::write(pi.join("settings.json"), "{}").expect("template file");
+
+    sb.run(&["apply", "-a", "img/pi-agent", "-n", "box", "--template"]);
+
+    let log = sb.log();
+    assert!(
+        log.contains("docker exec box sh -c mkdir -p /root/.pi/agent"),
+        "the target directory must exist before the copy: {log}"
+    );
+    assert!(
+        log.contains(&format!("docker cp {}/. box:/root/.pi/agent", pi.display())),
+        "the contents, not the directory itself: {log}"
+    );
+    assert!(
+        !sb.persist_dir_for("box", "pi-agent", "config").exists(),
+        "an unpersisted config must not be written under the data home"
     );
 }
