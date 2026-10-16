@@ -1031,6 +1031,11 @@ fn update_recreates_onto_a_repointed_tag_and_keeps_its_configuration() {
     build("FROM alpine:3.20\nRUN true\n");
     let out = s.run(&["update", "-n", "real-update", "--no-pull"]);
     assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        !stdout(&out).contains("Pulling image"),
+        "--no-pull still pulled: {}",
+        stdout(&out)
+    );
 
     assert_ne!(
         real_container_id("real-update"),
@@ -1216,6 +1221,11 @@ fn update_leaves_an_unchanged_container_alone() {
         first,
         "an unchanged image must not rebuild"
     );
+    assert!(
+        !stdout(&out).contains("Starting Agent"),
+        "update must not attach the agent: {}",
+        stdout(&out)
+    );
 }
 
 /// The pull path against a real registry: after `update`, the container runs the
@@ -1236,5 +1246,268 @@ fn update_pulls_the_tag_and_lands_on_its_current_image() {
         docker(&["inspect", "-f", "{{.Image}}", "real-updatepull"]),
         docker(&["image", "inspect", "-f", "{{.Id}}", "alpine:3.20"]),
         "the container does not run the image the tag now points at"
+    );
+}
+
+/// A dry run reports what would change without changing it: the container keeps
+/// its id and the record keeps the image id it had.
+#[test]
+fn update_dry_run_reports_without_recreating() {
+    let Some(mut s) = sb("update-dry") else {
+        return;
+    };
+    s.track("real-updatedry");
+
+    let ctx = s.root.join("ctx");
+    std::fs::create_dir_all(&ctx).expect("ctx");
+    let build = |body: &str| {
+        std::fs::write(ctx.join("Dockerfile"), body).expect("dockerfile");
+        let out = std::process::Command::new("docker")
+            .args([
+                "build",
+                "-t",
+                "agentdock-update-dry:1",
+                ctx.to_str().unwrap(),
+            ])
+            .output()
+            .expect("docker build");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    build("FROM alpine:3.20\n");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "agentdock-update-dry:1/sh",
+        "-n",
+        "real-updatedry",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let first = real_container_id("real-updatedry");
+    // Parsed rather than raw: the next command stamps the records version on
+    // startup, so the file's bytes legitimately change; what must not change is
+    // the records themselves.
+    let before: serde_json::Value =
+        serde_json::from_str(&s.records()).expect("parse records before dry run");
+
+    // The tag is repointed, so the rebuild branch is the one a real update
+    // would take.
+    build("FROM alpine:3.20\nRUN true\n");
+    let out = s.run(&["update", "-n", "real-updatedry", "--no-pull", "--dry-run"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("would be recreated"),
+        "{}",
+        stdout(&out)
+    );
+
+    assert_eq!(
+        real_container_id("real-updatedry"),
+        first,
+        "a dry run must not rebuild the container"
+    );
+    let after: serde_json::Value =
+        serde_json::from_str(&s.records()).expect("parse records after dry run");
+    assert_eq!(
+        after["records"], before["records"],
+        "a dry run must not rewrite the record"
+    );
+
+    let _ = std::process::Command::new("docker")
+        .args(["rmi", "-f", "agentdock-update-dry:1"])
+        .output();
+}
+
+/// A record written before `update` existed carries no image id, so it cannot be
+/// shown to be current. It takes the rebuild branch, reached from `None` rather
+/// than from a differing id.
+#[test]
+fn update_treats_a_record_without_an_image_id_as_out_of_date() {
+    let Some(mut s) = sb("update-old-record") else {
+        return;
+    };
+    s.track("real-updateold");
+    let out = s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-updateold"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let first = real_container_id("real-updateold");
+
+    let mut records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    records["records"]["real-updateold"]
+        .as_object_mut()
+        .expect("record object")
+        .remove("image_id");
+    s.write_records(&serde_json::to_string(&records).expect("serialise"));
+
+    let out = s.run(&["update", "-n", "real-updateold", "--no-pull"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_ne!(
+        real_container_id("real-updateold"),
+        first,
+        "a record with no image id must rebuild"
+    );
+
+    let current = docker(&["image", "inspect", "-f", "{{.Id}}", "alpine:3.20"]);
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    assert_eq!(
+        records["records"]["real-updateold"]["image_id"],
+        serde_json::json!(current),
+        "the rebuild must record the current image id"
+    );
+}
+
+/// The rebuild passes no `--init`, so the recorded script has to come back from
+/// the record and run again on the replacement container.
+#[test]
+fn update_reruns_the_recorded_init_script() {
+    let Some(mut s) = sb("update-init") else {
+        return;
+    };
+    s.track("real-updateinit");
+    std::fs::write(s.mount().join("setup.sh"), "echo hi > /tmp/init-rerun\n").expect("write init");
+
+    let ctx = s.root.join("ctx");
+    std::fs::create_dir_all(&ctx).expect("ctx");
+    let build = |tag: &str, body: &str| {
+        std::fs::write(ctx.join("Dockerfile"), body).expect("dockerfile");
+        let out = std::process::Command::new("docker")
+            .args(["build", "-t", tag, ctx.to_str().unwrap()])
+            .output()
+            .expect("docker build");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    build("agentdock-update-init:1", "FROM alpine:3.20\n");
+    build("agentdock-update-init:2", "FROM alpine:3.20\nRUN true\n");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "agentdock-update-init:1/sh",
+        "-n",
+        "real-updateinit",
+        "--init",
+        "setup.sh",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    docker(&["exec", "real-updateinit", "test", "-f", "/tmp/init-rerun"]);
+
+    let out = s.run(&[
+        "update",
+        "-n",
+        "real-updateinit",
+        "--image",
+        "agentdock-update-init:2",
+        "--no-pull",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        docker(&["inspect", "-f", "{{.Config.Image}}", "real-updateinit"]),
+        "agentdock-update-init:2",
+        "the rebuild did not move onto the named image"
+    );
+    // `docker exec test` exits non-zero when the file is missing, and the helper
+    // panics on that, so reaching this line means the script ran.
+    docker(&["exec", "real-updateinit", "test", "-f", "/tmp/init-rerun"]);
+    assert!(
+        s.records().contains("echo hi"),
+        "update dropped the init script: {}",
+        s.records()
+    );
+
+    for tag in ["agentdock-update-init:1", "agentdock-update-init:2"] {
+        let _ = std::process::Command::new("docker")
+            .args(["rmi", "-f", tag])
+            .output();
+    }
+}
+
+/// `update` brings a stopped container back up but never attaches the agent:
+/// the same division of labour `apply` and `up` have.
+#[test]
+fn update_restarts_a_stopped_container_without_attaching_the_agent() {
+    let Some(mut s) = sb("update-wake") else {
+        return;
+    };
+    s.track("real-updatewake");
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-updatewake"]);
+    docker(&["stop", "real-updatewake"]);
+
+    // The image has not moved, so the no-op branch is the one that has to bring
+    // the container back up.
+    let out = s.run(&["update", "-n", "real-updatewake", "--no-pull"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        docker(&["inspect", "-f", "{{.State.Running}}", "real-updatewake"]),
+        "true",
+        "update left the stopped container down"
+    );
+    assert!(
+        !stdout(&out).contains("Starting Agent"),
+        "update must not attach the agent: {}",
+        stdout(&out)
+    );
+}
+
+/// The pull happens before the destroy, so an image that cannot be fetched
+/// leaves the container it could not replace untouched.
+#[test]
+fn update_leaves_the_container_alone_when_the_image_cannot_be_pulled() {
+    let Some(mut s) = sb("update-pullfail") else {
+        return;
+    };
+    s.track("real-updatepullfail");
+    let out = s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-updatepullfail"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let first = real_container_id("real-updatepullfail");
+
+    let out = s.run(&[
+        "update",
+        "-n",
+        "real-updatepullfail",
+        "--image",
+        "localhost:1/absent/opencode",
+    ]);
+    assert!(
+        !out.status.success(),
+        "an unfetchable image must fail the update"
+    );
+
+    assert_eq!(
+        real_container_id("real-updatepullfail"),
+        first,
+        "a failed pull must not destroy the container"
+    );
+    assert_eq!(
+        docker(&["inspect", "-f", "{{.State.Running}}", "real-updatepullfail"]),
+        "true",
+        "a failed pull must leave the container running"
+    );
+}
+
+/// With no `-n`, `update` finds its container by the directory it serves, the
+/// same way `up` does.
+#[test]
+fn update_locates_the_container_by_path() {
+    let Some(mut s) = sb("update-path") else {
+        return;
+    };
+    s.track("real-updatepath");
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-updatepath"]);
+
+    // The sandbox runs agentdock from the mounted directory, so a bare update
+    // has only the path to go on.
+    let out = s.run(&["update", "--no-pull"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("already runs image"),
+        "update did not find the container by path: {}",
+        stdout(&out)
     );
 }
