@@ -17,7 +17,7 @@ agentdock <COMMAND>
 | `apply` | Create a container, or change an existing one to match the given settings |
 | `up` | Start an existing container without changing how it was built |
 | `stop` | Stop a running container without removing it |
-| `update` | Move an existing container onto the image its tag now points at |
+| `update` | Move an existing container onto its tag's current image, or one you name |
 | `list` | List all managed containers |
 | `delete` | Delete a container and its record |
 | `status` | Show container status |
@@ -74,6 +74,7 @@ agentdock update -n box            # pull the image, recreate only if it moved
 agentdock update                   # the container serving this directory
 agentdock update -n box --no-pull  # rebuild from the local image, no network
 agentdock update -n box --dry-run  # say what would happen, change nothing
+agentdock update -n box -i box:v2  # move onto a different image reference
 ```
 
 It reads the ports, environment, agent, init script and persisted directories
@@ -84,6 +85,12 @@ persisted directories live on the host, so they are mounted again and their
 contents survive. `status` shows the image and the id it was built from, and
 `list -v` adds them as the `IMAGE` and `IMAGE_ID` columns, so a difference is
 visible before you act on it.
+
+`update` otherwise follows only the reference the container was created with, so
+a new build that carries a different tag moves nothing on its own. `--image`
+supplies that reference — for instance after `docker load` brings a local tar in
+under a new tag — and the agent and every other recorded setting are still kept.
+Combine it with `--no-pull` when the image exists only locally.
 
 ### Persisting an agent's own data
 

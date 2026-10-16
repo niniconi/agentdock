@@ -1079,6 +1079,91 @@ fn update_recreates_onto_a_repointed_tag_and_keeps_its_configuration() {
         .output();
 }
 
+/// `update --image` moves the container onto a differently-tagged image, keeping
+/// the recorded configuration. The two references are built separately, so the
+/// named flag is the only way onto the second one.
+#[test]
+fn update_moves_onto_a_named_image_and_keeps_its_configuration() {
+    let Some(mut s) = sb("update-image") else {
+        return;
+    };
+    s.track("real-updateimage");
+
+    let ctx = s.root.join("ctx");
+    std::fs::create_dir_all(&ctx).expect("ctx");
+    let build = |tag: &str, body: &str| {
+        std::fs::write(ctx.join("Dockerfile"), body).expect("dockerfile");
+        let out = std::process::Command::new("docker")
+            .args(["build", "-t", tag, ctx.to_str().unwrap()])
+            .output()
+            .expect("docker build");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    build("agentdock-update-from:1", "FROM alpine:3.20\n");
+    build("agentdock-update-to:1", "FROM alpine:3.20\nRUN true\n");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "agentdock-update-from:1/sh",
+        "-n",
+        "real-updateimage",
+        "-e",
+        "FOO=bar",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let first = real_container_id("real-updateimage");
+
+    let out = s.run(&[
+        "update",
+        "-n",
+        "real-updateimage",
+        "--image",
+        "agentdock-update-to:1",
+        "--no-pull",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_ne!(
+        real_container_id("real-updateimage"),
+        first,
+        "update did not rebuild onto the named image"
+    );
+    assert_eq!(
+        docker(&["inspect", "-f", "{{.Image}}", "real-updateimage"]),
+        docker(&["image", "inspect", "-f", "{{.Id}}", "agentdock-update-to:1"]),
+        "the container does not run the named image"
+    );
+    assert_eq!(
+        docker(&["exec", "real-updateimage", "sh", "-c", "echo $FOO"]),
+        "bar",
+        "the environment was not kept"
+    );
+
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    let new_id = docker(&["image", "inspect", "-f", "{{.Id}}", "agentdock-update-to:1"]);
+    assert_eq!(
+        records["records"]["real-updateimage"]["docker_image"],
+        serde_json::json!("agentdock-update-to:1"),
+        "the record did not move onto the named image"
+    );
+    assert_eq!(
+        records["records"]["real-updateimage"]["image_id"],
+        serde_json::json!(new_id),
+        "the record did not capture the named image's id"
+    );
+
+    for tag in ["agentdock-update-from:1", "agentdock-update-to:1"] {
+        let _ = std::process::Command::new("docker")
+            .args(["rmi", "-f", tag])
+            .output();
+    }
+}
+
 /// `update` on a record whose container was removed outside agentdock fails the
 /// same way `up` does, before the rebuild path can surface the `docker rm` error.
 /// The recorded id is dropped so the rebuild branch is the one that would

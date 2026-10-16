@@ -17,7 +17,7 @@ agentdock <COMMAND>
 | `apply` | 创建容器，或把已有容器改成给定的配置 |
 | `up` | 启动已有容器，不改变它当初的构建方式 |
 | `stop` | 停止运行中的容器，但不删除它 |
-| `update` | 把已有容器迁移到它 tag 现在指向的镜像 |
+| `update` | 把已有容器迁移到它 tag 现在指向的镜像，或你指定的镜像 |
 | `list` | 列出所有受管理的容器 |
 | `delete` | 删除容器及其记录 |
 | `status` | 显示容器状态 |
@@ -67,6 +67,7 @@ agentdock update -n box            # 拉取镜像，只有变了才重建
 agentdock update                   # 服务当前目录的那个容器
 agentdock update -n box --no-pull  # 用本地镜像重建，不联网
 agentdock update -n box --dry-run  # 只说明会发生什么，不做任何改动
+agentdock update -n box -i box:v2  # 迁移到另一个镜像引用
 ```
 
 它从记录里读取端口、环境变量、agent、初始化脚本和持久化目录，拉取镜像，只在「记录里存
@@ -74,6 +75,10 @@ agentdock update -n box --dry-run  # 只说明会发生什么，不做任何改�
 在运行之外什么都不做。持久化目录在宿主机上，会被重新挂载，内容因此得以保留。`status` 会
 显示镜像和它构建时的 id，`list -v` 则把它们作为 `IMAGE` 和 `IMAGE_ID` 两列列出，这样在你
 动手之前就能看出差异。
+
+除此之外，`update` 只跟随容器创建时所用的那个引用，所以一个带着新 tag 的新构建不会自己
+迁移过去。`--image` 用来补上这个引用——例如 `docker load` 把本地 tar 以新 tag 载入之后——
+agent 以及记录里的其它设置仍然保留。镜像只在本地时配合 `--no-pull` 一起用。
 
 ### 持久化 agent 自己的数据
 

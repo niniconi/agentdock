@@ -44,7 +44,15 @@ pub fn execute_update(args: UpdateArgs) -> Result<()> {
     // The configuration comes from the record, not from flags: an update changes
     // the image and nothing else, so the ports, environment, proxied directories
     // and persisted directories the container was created with are all kept.
-    let config = Config::of(&record);
+    let mut config = Config::of(&record);
+
+    // The one thing a record cannot change on its own is the reference it stores.
+    // `--image` supplies a new one — the stored tag may never be repointed, and
+    // the newer build may carry a different tag — while the agent and every other
+    // setting still come from the record.
+    if let Some(image) = &args.image {
+        config.docker_image = image.clone();
+    }
 
     // A record whose container is gone is the same broken state `up` reports.
     // Checked before the rebuild so that path fails the one way, rather than

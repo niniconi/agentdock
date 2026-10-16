@@ -187,6 +187,15 @@ pub struct UpdateArgs {
     #[arg(short, long)]
     pub name: Option<String>,
 
+    /// Move the container onto this image reference instead of the one it was
+    /// created with
+    ///
+    /// The image and the agent are separate, so the agent stays the recorded
+    /// one. Without this, `update` only follows the reference the container was
+    /// created with: a tag that was never repointed moves nothing.
+    #[arg(short = 'i', long)]
+    pub image: Option<String>,
+
     /// Recreate from the local image without pulling the tag first
     #[arg(long)]
     pub no_pull: bool,

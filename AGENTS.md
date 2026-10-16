@@ -125,7 +125,10 @@ API. Most are `pub` only to cross module boundaries.
   actually moved. The comparison is `Record.image_id` against `DockerClient::image_id`: the
   record stores the `sha256:` id captured at create/replace time, so a tag that was repointed
   without the reference changing is detected, and a record written before `update` existed
-  (no `image_id`) is treated as out of date. `container::read_init` takes `config.init_content`
+  (no `image_id`) is treated as out of date. `--image` overrides the reference taken from the
+  record while the agent and every other setting still come from it; that is the only way to
+  follow a build that carries a new tag, since resolving the recorded reference moves nothing
+  on its own. `container::read_init` takes `config.init_content`
   as a fallback for exactly this path: `update` passes no `--init`, and without the fallback a
   rebuild would drop the script from the record. `--template` is deliberately not recorded;
   because persisted directories are served by mounts, only an unpersisted `--template` copy is

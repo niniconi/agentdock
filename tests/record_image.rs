@@ -309,6 +309,38 @@ fn update_pulls_and_recreates_when_the_tag_moved() {
     );
 }
 
+/// The stored image reference is the one thing `update` cannot change on its
+/// own: a tag that was never repointed moves nothing. `--image` names a new
+/// reference, and the agent and every other recorded setting are kept.
+#[test]
+fn update_moves_onto_a_named_image_and_keeps_the_record() {
+    let mut sb = sandbox("update-image");
+    sb.run(&["apply", "-a", "img/agent", "-n", "box"]);
+    sb.set_image_id("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    sb.reset_log();
+
+    let out = sb.run(&["update", "-n", "box", "--image", "other:1", "--no-pull"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let log = sb.log();
+    assert!(recreated(&log), "a different image must rebuild: {log}");
+    assert_eq!(
+        image_in_run(&log).as_deref(),
+        Some("other:1"),
+        "the rebuild must run the named image: {log}"
+    );
+    assert_recorded(&sb.records(), "other:1", "agent");
+    assert!(
+        sb.records().contains("sha256:bbbb"),
+        "the record must capture the new image id: {}",
+        sb.records()
+    );
+}
+
 /// The whole point of comparing image ids rather than rebuilding blindly: an
 /// unchanged tag leaves the container's identity alone while still refreshing
 /// the image for the next apply.
