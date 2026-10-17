@@ -219,6 +219,22 @@ fn up_restarts_a_stopped_container() {
     assert_eq!(real_container_id("real-stopped"), id_before, "up rebuilt");
 }
 
+/// `up` on a record whose container was removed outside agentdock reports the
+/// broken state rather than creating anything.
+#[test]
+fn up_reports_a_container_removed_outside_agentdock() {
+    let Some(mut s) = sb("up-gone") else { return };
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-upgone"]);
+    docker(&["rm", "-f", "real-upgone"]);
+
+    let out = s.run(&["up", "-n", "real-upgone"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("does not exist"), "{err}");
+    assert!(err.contains("apply"), "{err}");
+    assert!(err.contains("delete"), "{err}");
+}
+
 #[test]
 fn stop_stops_a_running_container_and_keeps_it() {
     let Some(mut s) = sb("stop") else { return };
@@ -262,6 +278,45 @@ fn stop_refuses_a_record_whose_container_is_gone() {
     let err = stderr(&out);
     assert!(err.contains("apply"), "{err}");
     assert!(err.contains("delete"), "{err}");
+}
+
+/// A stopped container is the state the user asked for, so `stop` says so and
+/// succeeds instead of stopping it again.
+#[test]
+fn stop_reports_a_container_that_is_already_stopped() {
+    let Some(mut s) = sb("stop-already") else {
+        return;
+    };
+    s.track("real-stopalready");
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-stopalready"]);
+    docker(&["stop", "real-stopalready"]);
+    let id = real_container_id("real-stopalready");
+
+    let out = s.run(&["stop", "-n", "real-stopalready"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("already stopped"), "{}", stdout(&out));
+    assert_eq!(
+        real_container_id("real-stopalready"),
+        id,
+        "the container must survive a second stop"
+    );
+}
+
+/// Without `-n`, `stop` finds the record by the directory the container serves,
+/// the same way `up` does.
+#[test]
+fn a_bare_stop_reaches_the_container_by_path() {
+    let Some(mut s) = sb("bare-stop") else { return };
+    s.track("real-barestop");
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-barestop"]);
+
+    let out = s.run(&["stop"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        docker(&["inspect", "-f", "{{.State.Running}}", "real-barestop"]),
+        "false",
+        "a bare stop did not stop the container"
+    );
 }
 
 #[test]
@@ -404,6 +459,43 @@ fn a_bare_apply_drops_a_previously_persisted_mount() {
     assert!(!dests.contains("opencode"), "{dests}");
     assert!(!dests.contains(".pi/agent"), "{dests}");
     assert!(!s.records().contains("\"persist\""), "{}", s.records());
+}
+
+/// A bare `apply` with nothing recorded under the directory has no name to
+/// take, so it invents one; the record then lets a bare `up` find it by path.
+#[test]
+fn a_bare_apply_generates_a_name_and_a_bare_up_reaches_it() {
+    let Some(mut s) = sb("bare-apply") else {
+        return;
+    };
+    let out = s.run(&["apply", "-a", "alpine:3.20/sh"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    let names: Vec<String> = records["records"]
+        .as_object()
+        .expect("records object")
+        .keys()
+        .cloned()
+        .collect();
+    assert_eq!(names.len(), 1, "{}", s.records());
+    let name = &names[0];
+    s.track(name);
+    assert_eq!(name.len(), 36, "the generated name is not a UUID: {name}");
+    assert_eq!(
+        name.matches('-').count(),
+        4,
+        "the generated name is not a UUID: {name}"
+    );
+    let id = real_container_id(name);
+
+    let out = s.run(&["up"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        real_container_id(name),
+        id,
+        "the bare up rebuilt the container"
+    );
 }
 
 #[test]
@@ -556,6 +648,78 @@ fn delete_without_purge_says_nothing_when_there_was_no_data() {
     );
 }
 
+/// Without `--force`, a running container is left alone and so is its record:
+/// `delete` refuses rather than guessing.
+#[test]
+fn delete_without_force_refuses_a_running_container() {
+    let Some(mut s) = sb("delete-running") else {
+        return;
+    };
+    s.track("real-deleterunning");
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-deleterunning"]);
+
+    let out = s.run(&["delete", "real-deleterunning"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("is running"), "{err}");
+    assert!(err.contains("--force"), "{err}");
+    assert_eq!(
+        docker(&["inspect", "-f", "{{.State.Running}}", "real-deleterunning"]),
+        "true",
+        "the refused delete must not touch the container"
+    );
+    assert!(
+        s.records().contains("real-deleterunning"),
+        "the refused delete must not drop the record: {}",
+        s.records()
+    );
+}
+
+/// A stopped container is already down, so a plain `delete` removes it and its
+/// record without `--force`.
+#[test]
+fn delete_without_force_removes_a_stopped_container() {
+    let Some(mut s) = sb("delete-stopped") else {
+        return;
+    };
+    s.track("real-deletestopped");
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-deletestopped"]);
+    docker(&["stop", "real-deletestopped"]);
+
+    let out = s.run(&["delete", "real-deletestopped"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        docker(&["ps", "-a", "-q", "-f", "name=real-deletestopped"]),
+        "",
+        "the stopped container should have been removed"
+    );
+    assert!(
+        !s.records().contains("real-deletestopped"),
+        "{}",
+        s.records()
+    );
+}
+
+/// The record outliving its container is not an error for `delete`: there is
+/// nothing left to remove, so it says so and drops the record.
+#[test]
+fn delete_skips_a_container_that_is_already_gone() {
+    let Some(mut s) = sb("delete-gone") else {
+        return;
+    };
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-deletegone"]);
+    docker(&["rm", "-f", "real-deletegone"]);
+
+    let out = s.run(&["delete", "real-deletegone"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("skipping removal"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(!s.records().contains("real-deletegone"), "{}", s.records());
+}
+
 #[test]
 fn a_missing_image_reports_the_pull_failure() {
     let Some(mut s) = sb("persist-nopull") else {
@@ -591,6 +755,119 @@ fn status_reports_running_and_stopped() {
     docker(&["stop", "real-status"]);
     let out = s.run(&["status", "real-status"]);
     assert!(stdout(&out).contains("Stopped"), "{}", stdout(&out));
+}
+
+/// `status` names the recorded reference and the image id `update` compares,
+/// cut the same short way `list` cuts it.
+#[test]
+fn status_reports_the_image_and_its_id() {
+    let Some(mut s) = sb("status-image") else {
+        return;
+    };
+    s.track("real-statusimage");
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-statusimage"]);
+
+    let out = s.run(&["status", "real-statusimage"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    let id = docker(&["image", "inspect", "-f", "{{.Id}}", "alpine:3.20"]);
+    let short: String = id.trim_start_matches("sha256:").chars().take(12).collect();
+    assert!(text.contains("Image:        alpine:3.20"), "{text}");
+    assert!(text.contains(&format!("Image ID:     {short}")), "{text}");
+}
+
+/// A record whose container was removed outside agentdock still reports, with
+/// `NotFound` standing in for the daemon's missing container.
+#[test]
+fn status_reports_a_container_that_is_gone() {
+    let Some(mut s) = sb("status-gone") else {
+        return;
+    };
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-statusgone"]);
+    docker(&["rm", "-f", "real-statusgone"]);
+
+    let out = s.run(&["status", "real-statusgone"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("NotFound"), "{}", stdout(&out));
+}
+
+#[test]
+fn status_refuses_an_unknown_name() {
+    let Some(mut s) = sb("status-ghost") else {
+        return;
+    };
+    let out = s.run(&["status", "ghost"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("ghost"), "{err}");
+    assert!(err.contains("not found in managed records"), "{err}");
+}
+
+#[test]
+fn list_says_when_nothing_is_managed() {
+    let Some(mut s) = sb("list-empty") else {
+        return;
+    };
+    let out = s.run(&["list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "No managed containers found.");
+}
+
+/// A record whose container is gone is not a managed container: the plain
+/// listing skips it, and `--all` is what asks to see it.
+#[test]
+fn list_hides_a_gone_container_unless_all_is_passed() {
+    let Some(mut s) = sb("list-hides") else {
+        return;
+    };
+    s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-listgone"]);
+    docker(&["rm", "-f", "real-listgone"]);
+
+    let hidden = s.run(&["list"]);
+    assert!(hidden.status.success(), "{}", stderr(&hidden));
+    assert!(
+        !stdout(&hidden).contains("real-listgone"),
+        "{}",
+        stdout(&hidden)
+    );
+    assert!(
+        stdout(&hidden).contains("No managed containers found."),
+        "{}",
+        stdout(&hidden)
+    );
+
+    let all = s.run(&["list", "--all"]);
+    let text = stdout(&all);
+    assert!(text.contains("real-listgone"), "{text}");
+    assert!(text.contains("NotFound"), "{text}");
+}
+
+/// The same row vector the stub suite pins, produced on a real daemon: `-v
+/// --format json` is a JSON array and the ports column is the `-P` flag. The
+/// host port is not 8080, which another test binds, so the two can run in
+/// parallel without fighting over it.
+#[test]
+fn list_json_emits_the_rows_as_json_on_a_real_daemon() {
+    let Some(mut s) = sb("list-json") else { return };
+    s.track("real-listjson");
+    s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-listjson",
+        "-P",
+        "48080:80",
+    ]);
+
+    let out = s.run(&["list", "--format", "json", "-v"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    let row = &v[0];
+    assert_eq!(row[0], "real-listjson");
+    // Verbose row: name, path, status, created, ports, proxies, persisted.
+    assert_eq!(row[2], "Running", "{}", stdout(&out));
+    assert_eq!(row[4], "48080:80", "{}", stdout(&out));
 }
 
 #[test]
