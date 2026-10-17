@@ -169,6 +169,166 @@ fn an_omitted_flag_turns_the_setting_off() {
     assert!(!s.records().contains("8080:80"), "{}", s.records());
 }
 
+/// `--env-file` is parsed by agentdock itself, not handed to docker, so the
+/// proof is that the variables reach the container's real environment and the
+/// record. Comments and blank lines are skipped in the process.
+#[test]
+fn apply_reads_env_from_an_env_file_on_a_real_daemon() {
+    let Some(mut s) = sb("env-file") else { return };
+    s.track("real-envfile");
+    std::fs::write(
+        s.mount().join("app.env"),
+        "# comment\n\nFROM_FILE=hello\nSECOND=world\n",
+    )
+    .expect("write env file");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-envfile",
+        "--env-file",
+        "app.env",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-envfile",
+            "sh",
+            "-c",
+            "echo $FROM_FILE $SECOND"
+        ]),
+        "hello world",
+        "the env file did not reach the container"
+    );
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    assert_eq!(
+        records["records"]["real-envfile"]["envs"],
+        serde_json::json!(["FROM_FILE=hello", "SECOND=world"]),
+        "{}",
+        s.records()
+    );
+}
+
+/// `-e` wins over the file on a duplicate key, the way `docker run` resolves
+/// the two, and a key only the file carries still arrives.
+#[test]
+fn an_env_flag_overrides_a_duplicate_env_file_entry() {
+    let Some(mut s) = sb("env-file-override") else {
+        return;
+    };
+    s.track("real-envoverride");
+    std::fs::write(s.mount().join("app.env"), "FOO=from-file\nONLY_FILE=kept\n")
+        .expect("write env file");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-envoverride",
+        "--env-file",
+        "app.env",
+        "-e",
+        "FOO=from-flag",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-envoverride",
+            "sh",
+            "-c",
+            "echo $FOO $ONLY_FILE"
+        ]),
+        "from-flag kept",
+        "the flag did not override the file entry"
+    );
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    assert_eq!(
+        records["records"]["real-envoverride"]["envs"],
+        serde_json::json!(["FOO=from-flag", "ONLY_FILE=kept"]),
+        "{}",
+        s.records()
+    );
+}
+
+/// A proxy flag is applied as both `HTTP_PROXY` and `http_proxy`, since tools
+/// read one or the other, and the same for HTTPS.
+#[test]
+fn apply_sets_both_proxy_cases_in_the_container() {
+    let Some(mut s) = sb("proxy-env") else { return };
+    s.track("real-proxyenv");
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-proxyenv",
+        "--http-proxy",
+        "http://proxy.test:3128",
+        "--https-proxy",
+        "https://proxy.test:3128",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let env = docker(&["inspect", "-f", "{{json .Config.Env}}", "real-proxyenv"]);
+    for entry in [
+        "\"HTTP_PROXY=http://proxy.test:3128\"",
+        "\"http_proxy=http://proxy.test:3128\"",
+        "\"HTTPS_PROXY=https://proxy.test:3128\"",
+        "\"https_proxy=https://proxy.test:3128\"",
+    ] {
+        assert!(env.contains(entry), "{entry} not in {env}");
+    }
+}
+
+/// The proxies are in the record, so `status` and `list -v` can report them
+/// without the flags being repeated.
+#[test]
+fn status_and_list_show_the_recorded_proxies() {
+    let Some(mut s) = sb("proxy-show") else {
+        return;
+    };
+    s.track("real-proxyshow");
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-proxyshow",
+        "--http-proxy",
+        "http://proxy.test:3128",
+        "--https-proxy",
+        "https://proxy.test:3128",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let status = stdout(&s.run(&["status", "real-proxyshow"]));
+    for expected in [
+        "HTTP Proxy",
+        "HTTPS Proxy",
+        "http://proxy.test:3128",
+        "https://proxy.test:3128",
+    ] {
+        assert!(status.contains(expected), "{expected} not in {status}");
+    }
+
+    let listed = stdout(&s.run(&["list", "-v"]));
+    for expected in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "http://proxy.test:3128",
+        "https://proxy.test:3128",
+    ] {
+        assert!(listed.contains(expected), "{expected} not in {listed}");
+    }
+}
+
 #[test]
 fn up_never_recreates_the_container() {
     let Some(mut s) = sb("upnorecreate") else {
