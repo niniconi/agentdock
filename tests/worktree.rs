@@ -479,6 +479,11 @@ fn init_refuses_a_second_time() {
     let main = sb.path("proj/proj-main");
     let out = agentdock(&main, &sb.home(), &["worktree", "init"]);
     assert!(!out.status.success(), "second init was accepted");
+    assert!(
+        stderr(&out).contains("sits inside an existing worktree project"),
+        "unexpected message: {}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -853,4 +858,120 @@ fn a_current_version_marker_is_not_rewritten() {
         !sb.path("proj/.agentdock.json.bak.v0").exists(),
         "a current marker must not be backed up as old"
     );
+}
+
+#[test]
+fn init_refuses_a_non_git_directory() {
+    let Some(sb) = Sandbox::new("nogit") else {
+        return;
+    };
+    let plain = sb.path("plain");
+    std::fs::create_dir_all(&plain).expect("create plain dir");
+
+    let out = agentdock(&plain, &sb.home(), &["worktree", "init"]);
+    assert!(!out.status.success(), "accepted: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("not inside a git repository"), "{err}");
+    assert!(err.contains("git init"), "should suggest git init: {err}");
+    assert!(
+        !sb.path("plain/.agentdock.json").exists(),
+        "a marker was written into a non-repository"
+    );
+}
+
+#[test]
+fn init_refuses_a_detached_head() {
+    let Some(sb) = Sandbox::new("detachedhead") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    git(&repo, &["checkout", "-q", "--detach"]);
+
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    assert!(!out.status.success(), "accepted: {}", stdout(&out));
+    assert!(
+        stderr(&out).contains("HEAD is detached"),
+        "unexpected message: {}",
+        stderr(&out)
+    );
+    assert!(repo.join(".git").is_dir(), "the repo was moved anyway");
+}
+
+#[test]
+fn add_refuses_start_point_on_an_existing_branch() {
+    let Some(sb) = Sandbox::new("sp-existing") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
+    let main = sb.path("proj/proj-main");
+    git(&main, &["branch", "dev"]);
+
+    // --start-point only applies to branches agentdock creates, so an existing
+    // branch makes the flag meaningless and the add refuses.
+    let out = agentdock(
+        &main,
+        &sb.home(),
+        &["worktree", "add", "dev", "--start-point", "main"],
+    );
+    assert!(!out.status.success(), "accepted: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("already exists"), "{err}");
+    assert!(err.contains("--start-point"), "{err}");
+    assert!(
+        !sb.path("proj/proj-dev").exists(),
+        "the worktree was created anyway"
+    );
+}
+
+#[test]
+fn rm_reports_an_unknown_branch() {
+    let Some(sb) = Sandbox::new("rmunknown") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
+
+    let main = sb.path("proj/proj-main");
+    let out = agentdock(&main, &sb.home(), &["worktree", "rm", "ghost"]);
+    assert!(!out.status.success(), "accepted: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("ghost"), "{err}");
+    assert!(
+        err.contains("worktree add"),
+        "should suggest how to create the worktree: {err}"
+    );
+}
+
+#[test]
+fn list_reports_a_missing_main_worktree() {
+    let Some(sb) = Sandbox::new("nomain") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
+
+    // The main worktree holds the repository's .git, so without it everything
+    // derived from the marker is unusable and list has to say which directory
+    // to restore.
+    std::fs::remove_dir_all(sb.path("proj/proj-main/.git")).expect("remove main .git");
+
+    let container = sb.path("proj");
+    let out = agentdock(&container, &sb.home(), &["worktree", "list"]);
+    assert!(!out.status.success(), "listed anyway: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("missing"), "{err}");
+    assert!(err.contains("proj-main"), "{err}");
 }
