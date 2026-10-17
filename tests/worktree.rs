@@ -7,6 +7,7 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// A throwaway directory tree that cleans itself up.
 struct Sandbox {
     root: PathBuf,
+    containers: Vec<String>,
 }
 
 impl Sandbox {
@@ -25,7 +26,10 @@ impl Sandbox {
         std::fs::create_dir_all(&root).expect("create sandbox");
         // A private HOME keeps ~/.config/agentdock/records.json out of the way.
         std::fs::create_dir_all(root.join("home")).expect("create sandbox home");
-        Some(Sandbox { root })
+        Some(Sandbox {
+            root,
+            containers: Vec::new(),
+        })
     }
 
     fn home(&self) -> PathBuf {
@@ -35,10 +39,19 @@ impl Sandbox {
     fn path(&self, rel: &str) -> PathBuf {
         self.root.join(rel)
     }
+
+    /// Track a real docker container for cleanup; only the tests that reach a
+    /// daemon call this.
+    fn track(&mut self, name: &str) {
+        self.containers.push(name.to_string());
+    }
 }
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
+        for name in &self.containers {
+            let _ = Command::new("docker").args(["rm", "-f", name]).output();
+        }
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
@@ -49,6 +62,31 @@ fn git_available() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// The docker-facing tests in this file skip cleanly without a daemon, the way
+/// the git-facing ones skip without git.
+fn docker_available() -> bool {
+    Command::new("docker")
+        .args(["version", "--format", "{{.Server.Version}}"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Run docker, panicking on failure, and return its trimmed stdout.
+fn docker(args: &[&str]) -> String {
+    let out = Command::new("docker")
+        .args(args)
+        .output()
+        .expect("run docker");
+    assert!(
+        out.status.success(),
+        "docker {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 /// Run git, panicking on failure, and return its trimmed stdout.
@@ -76,6 +114,9 @@ fn agentdock(cwd: &Path, home: &Path, args: &[&str]) -> Output {
         .current_dir(cwd)
         .args(args)
         .env("HOME", home)
+        // Pinned like HOME, so a leaked XDG_DATA_HOME cannot move the persisted
+        // data home out of the sandbox and into the runner's own.
+        .env("XDG_DATA_HOME", home.join(".local/share"))
         .output()
         .expect("run agentdock")
 }
@@ -628,6 +669,140 @@ fn rm_force_discards_uncommitted_changes() {
     let out = agentdock(&main, &sb.home(), &["worktree", "rm", "feat", "--force"]);
     assert!(out.status.success(), "rm --force failed: {}", stderr(&out));
     assert!(!feat.exists(), "the worktree directory should be gone");
+}
+
+/// The docker half of `add --apply`: the container is created with the worktree
+/// directory as its `/workspace`, and `worktree list` names it in the CONTAINER
+/// column. Skipped without a daemon.
+#[test]
+fn add_apply_creates_a_container_bound_to_the_worktree() {
+    if !docker_available() {
+        return;
+    }
+    let Some(mut sb) = Sandbox::new("applycontainer") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
+    let main = sb.path("proj/proj-main");
+
+    let out = agentdock(
+        &main,
+        &sb.home(),
+        &["worktree", "add", "dev", "--apply", "-a", "alpine:3.20/sh"],
+    );
+    assert!(out.status.success(), "add --apply failed: {}", stderr(&out));
+    sb.track("proj-dev");
+
+    let worktree = sb.path("proj/proj-dev");
+    let source = docker(&[
+        "inspect",
+        "-f",
+        "{{range .Mounts}}{{if eq .Destination \"/workspace\"}}{{.Source}}{{end}}{{end}}",
+        "proj-dev",
+    ]);
+    assert_eq!(
+        std::fs::canonicalize(&source).expect("mount source"),
+        std::fs::canonicalize(&worktree).expect("worktree"),
+        "the container is not mounted on the worktree directory"
+    );
+
+    let listed = stdout(&agentdock(&main, &sb.home(), &["worktree", "list"]));
+    let dev_row = listed
+        .lines()
+        .find(|l| l.starts_with("worktree") && l.contains("proj-dev"))
+        .unwrap_or_else(|| panic!("no worktree row in: {listed}"));
+    assert_eq!(
+        dev_row.split_whitespace().last(),
+        Some("proj-dev"),
+        "the CONTAINER column does not name the worktree's container: {listed}"
+    );
+    let main_row = listed
+        .lines()
+        .find(|l| l.starts_with("main"))
+        .unwrap_or_else(|| panic!("no main row in: {listed}"));
+    assert_eq!(
+        main_row.split_whitespace().last(),
+        Some("-"),
+        "a worktree without a container must show '-': {listed}"
+    );
+}
+
+/// `rm --force` on a worktree with an attached container removes the record and
+/// keeps the persisted data, saying where it is; the container itself is left
+/// for `delete`. Skipped without a daemon.
+#[test]
+fn rm_force_removes_the_record_and_keeps_persisted_data() {
+    if !docker_available() {
+        return;
+    }
+    let Some(mut sb) = Sandbox::new("rmcontainer") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
+    let main = sb.path("proj/proj-main");
+
+    let out = agentdock(
+        &main,
+        &sb.home(),
+        &[
+            "worktree",
+            "add",
+            "feat",
+            "--apply",
+            "--persist",
+            "-a",
+            "alpine:3.20/sh",
+        ],
+    );
+    assert!(out.status.success(), "add --apply failed: {}", stderr(&out));
+    sb.track("proj-feat");
+    let data = sb.home().join(".local/share/agentdock/proj-feat");
+    assert!(
+        data.is_dir(),
+        "the persisted data directory was not created"
+    );
+
+    let out = agentdock(&main, &sb.home(), &["worktree", "rm", "feat"]);
+    assert!(
+        !out.status.success(),
+        "removed despite the attached container"
+    );
+    assert!(
+        stderr(&out).contains("proj-feat"),
+        "the refusal should name the container: {}",
+        stderr(&out)
+    );
+
+    let out = agentdock(&main, &sb.home(), &["worktree", "rm", "feat", "--force"]);
+    assert!(out.status.success(), "rm --force failed: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("Removed container record: proj-feat"),
+        "{text}"
+    );
+    assert!(text.contains("persisted data kept at:"), "{text}");
+    assert!(
+        data.is_dir(),
+        "the data was removed along with the worktree"
+    );
+    assert!(!sb.path("proj/proj-feat").exists(), "worktree survived");
+
+    let left = stdout(&agentdock(
+        &main,
+        &sb.home(),
+        &["list", "--all", "--format", "json"],
+    ));
+    assert!(!left.contains("proj-feat"), "record survived: {left}");
 }
 
 #[test]
