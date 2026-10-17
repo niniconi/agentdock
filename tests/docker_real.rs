@@ -49,6 +49,31 @@ fn persist_dir(sandbox: &Sandbox, name: &str, kind: &str) -> PathBuf {
     agent_persist_dir(sandbox, name, "opencode", kind)
 }
 
+/// Build an image from a Dockerfile body, with the context kept in the sandbox
+/// so concurrent tests cannot share one.
+fn build_image(sandbox: &Sandbox, tag: &str, body: &str) {
+    let ctx = sandbox.root.join("ctx");
+    std::fs::create_dir_all(&ctx).expect("ctx");
+    std::fs::write(ctx.join("Dockerfile"), body).expect("dockerfile");
+    let out = std::process::Command::new("docker")
+        .args(["build", "-t", tag, ctx.to_str().unwrap()])
+        .output()
+        .expect("docker build");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Remove a probe image; failures are ignored because the container that used
+/// it may still be around, and the sandbox removes that at the end.
+fn remove_image(tag: &str) {
+    let _ = std::process::Command::new("docker")
+        .args(["rmi", "-f", tag])
+        .output();
+}
+
 #[test]
 fn apply_configures_a_real_container() {
     let Some(mut s) = sb("apply") else { return };
@@ -1117,6 +1142,144 @@ fn persist_finds_the_home_through_a_registry_qualified_image() {
 
     let dests = destinations("real-regpersist");
     assert!(dests.contains("/root/.config/opencode"), "{dests}");
+}
+
+/// `USER root:root` is a routine Dockerfile line and docker passes it through
+/// verbatim: read whole it is not `root`, and the mount would land on
+/// /home/root:root, a directory nothing writes to.
+#[test]
+fn root_user_with_a_group_mounts_under_root() {
+    let Some(mut s) = sb("user-rootgroup") else {
+        return;
+    };
+    s.track("real-rootgroup");
+    build_image(
+        &s,
+        "agentdock-probe-rootgroup",
+        "FROM alpine:3.20\nUSER root:root\n",
+    );
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "agentdock-probe-rootgroup/sh",
+        "-n",
+        "real-rootgroup",
+        "--persist",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let dests = destinations("real-rootgroup");
+    assert!(dests.contains("/root/.config/opencode"), "{dests}");
+    assert!(!dests.contains("root:root"), "{dests}");
+
+    remove_image("agentdock-probe-rootgroup");
+}
+
+/// A named user with no HOME declared: `/home/<user>` is a convention rather
+/// than a fact, so agentdock uses it and says so on stderr. The group suffix
+/// never reaches the path.
+#[test]
+fn a_named_user_without_home_guesses_the_conventional_directory() {
+    let Some(mut s) = sb("user-guess") else {
+        return;
+    };
+    s.track("real-userguess");
+    build_image(
+        &s,
+        "agentdock-probe-guess",
+        "FROM alpine:3.20\nRUN adduser -D -h /home/node node\nUSER node:node\n",
+    );
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "agentdock-probe-guess/sh",
+        "-n",
+        "real-userguess",
+        "--persist",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let dests = destinations("real-userguess");
+    assert!(dests.contains("/home/node/.config/opencode"), "{dests}");
+    assert!(!dests.contains("node:node"), "{dests}");
+    let err = stderr(&out);
+    assert!(err.contains("declares no HOME"), "{err}");
+    assert!(err.contains("/home/node"), "{err}");
+
+    remove_image("agentdock-probe-guess");
+}
+
+/// Omitting `-a` uses the built-in default: the image `nixos` and the agent
+/// `pi-agent`. There is nothing to pull under that name, so the image is built
+/// locally; the test skips when a `nixos` image already exists, so it never
+/// clobbers one.
+#[test]
+fn apply_without_an_agent_uses_the_default_on_a_real_daemon() {
+    let exists = std::process::Command::new("docker")
+        .args(["image", "inspect", "nixos"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if exists {
+        return;
+    }
+    let Some(mut s) = sb("default-agent") else {
+        return;
+    };
+    s.track("real-defaultagent");
+    build_image(
+        &s,
+        "nixos",
+        "FROM alpine:3.20\nRUN printf '#!/bin/sh\\necho pi-agent-up\\n' > /usr/local/bin/pi-agent && chmod +x /usr/local/bin/pi-agent\n",
+    );
+
+    let out = s.run(&["apply", "-n", "real-defaultagent"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    assert_eq!(
+        records["records"]["real-defaultagent"]["docker_image"],
+        "nixos"
+    );
+    assert_eq!(
+        records["records"]["real-defaultagent"]["agent_name"],
+        "pi-agent"
+    );
+
+    // The resolved name is what `up` executes, so it has to be the real default
+    // rather than something empty that exec would ignore.
+    let out = s.run(&["up", "-n", "real-defaultagent"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("Starting Agent: pi-agent"),
+        "{}",
+        stdout(&out)
+    );
+
+    // Removed before the image, so the tag is really gone and the guard above
+    // stays honest on the next run.
+    docker(&["rm", "-f", "real-defaultagent"]);
+    remove_image("nixos");
+}
+
+/// `--kvm` maps the host's /dev/kvm into the container, asserted on the
+/// daemon's own device list. The host has to provide the device, so the test
+/// skips where it does not exist.
+#[test]
+fn kvm_flag_maps_the_device_in_on_a_real_daemon() {
+    if !std::path::Path::new("/dev/kvm").exists() {
+        return;
+    }
+    let Some(mut s) = sb("kvm") else { return };
+    s.track("real-kvm");
+    let out = s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-kvm", "--kvm"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let devices = docker(&["inspect", "-f", "{{json .HostConfig.Devices}}", "real-kvm"]);
+    assert!(devices.contains("/dev/kvm"), "{devices}");
+    assert!(s.records().contains("\"kvm\": true"), "{}", s.records());
 }
 
 #[test]
