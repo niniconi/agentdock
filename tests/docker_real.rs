@@ -8,11 +8,11 @@
 
 mod common;
 
-use common::{DockerMode, Sandbox, docker, scenarios, stderr, stdout};
+use common::{Sandbox, docker, scenarios, stderr, stdout};
 use std::path::PathBuf;
 
 fn sb(label: &str) -> Option<Sandbox> {
-    Sandbox::new(label, DockerMode::Real)
+    Sandbox::real(label)
 }
 
 fn real_container_id(name: &str) -> String {
@@ -738,6 +738,64 @@ fn persist_is_recorded_so_list_can_show_it() {
 
     let listed = stdout(&s.run(&["list", "-v"]));
     assert!(listed.contains("real-provenance/opencode/data"), "{listed}");
+    // pi-agent contributes a config directory and no data directory, so a
+    // data-only run must not invent one for it.
+    assert!(!listed.contains("pi-agent"), "{listed}");
+
+    // With config persisted instead, the row names each agent's own directory
+    // under the container: the table is derived from the same entries the
+    // mounts are, so it cannot drift from them.
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-provenance",
+        "--persist",
+        "config",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let listed = stdout(&s.run(&["list", "-v"]));
+    assert!(
+        listed.contains("real-provenance/opencode/config"),
+        "{listed}"
+    );
+    assert!(
+        listed.contains("real-provenance/pi-agent/config"),
+        "{listed}"
+    );
+    assert!(
+        !listed.contains("real-provenance/pi-agent/data"),
+        "{listed}"
+    );
+}
+
+/// clap lets `--persist` repeat and append, so the flag arrives as two
+/// entries; the record must not end up carrying the same kind twice.
+#[test]
+fn persist_repeats_do_not_accumulate() {
+    let Some(mut s) = sb("persist-repeat") else {
+        return;
+    };
+    s.track("real-persistrepeat");
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-persistrepeat",
+        "--persist",
+        "config,config",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    assert_eq!(
+        records["records"]["real-persistrepeat"]["persist"],
+        serde_json::json!(["config"]),
+        "{}",
+        s.records()
+    );
 }
 
 #[test]
@@ -1050,9 +1108,30 @@ fn list_json_emits_the_rows_as_json_on_a_real_daemon() {
     let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
     let row = &v[0];
     assert_eq!(row[0], "real-listjson");
-    // Verbose row: name, path, status, created, ports, proxies, persisted.
+    // Verbose row: name, path, status, created, ports, proxies, persisted,
+    // image, image id.
     assert_eq!(row[2], "Running", "{}", stdout(&out));
     assert_eq!(row[4], "48080:80", "{}", stdout(&out));
+    assert_eq!(row[8], "alpine:3.20", "{}", stdout(&out));
+
+    // The recorded id is the one docker reported at create time, shortened
+    // the way docker does. The recorded reference alone would not pin it: a
+    // tag is a moving name, and the record has to remember the build.
+    let image_id = docker(&["image", "inspect", "-f", "{{.Id}}", "alpine:3.20"]);
+    let short_id: String = image_id
+        .strip_prefix("sha256:")
+        .unwrap_or(&image_id)
+        .chars()
+        .take(12)
+        .collect();
+    assert_eq!(row[9], short_id, "{}", stdout(&out));
+
+    // The table form carries the same columns.
+    let listed = stdout(&s.run(&["list", "-v"]));
+    assert!(listed.contains("PORTS"), "{listed}");
+    assert!(listed.contains("48080:80"), "{listed}");
+    assert!(listed.contains("IMAGE_ID"), "{listed}");
+    assert!(listed.contains(&short_id), "{listed}");
 }
 
 #[test]
@@ -1344,6 +1423,45 @@ fn template_seeds_a_persisted_config_on_a_real_daemon() {
     );
 }
 
+/// A host config directory that does not exist simply means no seeding: the
+/// persisted directory is still created, and stays empty.
+#[test]
+fn template_without_a_host_directory_is_not_an_error() {
+    let Some(mut s) = sb("tmpl-absent") else {
+        return;
+    };
+    s.track("real-tmplabsent");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-tmplabsent",
+        "--persist",
+        "config",
+        "--template",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    for dir in [
+        persist_dir(&s, "real-tmplabsent", "config"),
+        agent_persist_dir(&s, "real-tmplabsent", "pi-agent", "config"),
+    ] {
+        assert!(
+            dir.is_dir(),
+            "the directory is still created: {}",
+            dir.display()
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "nothing seeded into {}",
+            dir.display()
+        );
+    }
+}
+
 #[test]
 fn template_copies_host_config_into_an_unpersisted_container() {
     let Some(mut s) = sb("tmpl-copy") else { return };
@@ -1384,6 +1502,11 @@ fn without_template_the_container_has_no_host_config() {
     let tmpl = s.host_config_dir();
     std::fs::create_dir_all(&tmpl).expect("template dir");
     std::fs::write(tmpl.join("opencode.json"), "from-host").expect("template file");
+    // Seed Pi's host directory too: the flag guards every agent's source, not
+    // just opencode's.
+    let pi = s.host_pi_agent_dir();
+    std::fs::create_dir_all(&pi).expect("pi template dir");
+    std::fs::write(pi.join("settings.json"), "from-host").expect("pi template file");
 
     let out = s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-tmploff"]);
     assert!(out.status.success(), "{}", stderr(&out));
@@ -1400,6 +1523,17 @@ fn without_template_the_container_has_no_host_config() {
     assert_eq!(
         present, "no",
         "the host template leaked in without --template"
+    );
+    let present = docker(&[
+        "exec",
+        "real-tmploff",
+        "sh",
+        "-c",
+        "test -e /root/.pi/agent/settings.json && echo yes || echo no",
+    ]);
+    assert_eq!(
+        present, "no",
+        "the host Pi config leaked in without --template"
     );
 }
 
@@ -1568,6 +1702,47 @@ fn template_copies_pi_agent_config_into_an_unpersisted_container() {
     assert!(
         !agent_persist_dir(&s, "real-picopy", "pi-agent", "config").exists(),
         "an unpersisted config must not be written under the data home"
+    );
+}
+
+/// `--persist data` leaves the config directory unpersisted, so `--template`
+/// takes the copy path for every agent — pi-agent included, since config is
+/// its only directory. A data-only run must not skip the config templates.
+#[test]
+fn template_copies_config_for_a_run_that_persists_only_data() {
+    let Some(mut s) = sb("pi-data-tmpl") else {
+        return;
+    };
+    s.track("real-pidatatmpl");
+    let pi = s.host_pi_agent_dir();
+    std::fs::create_dir_all(&pi).expect("template dir");
+    std::fs::write(pi.join("settings.json"), "from-host").expect("template file");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-pidatatmpl",
+        "--persist",
+        "data",
+        "--template",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(
+        docker(&[
+            "exec",
+            "real-pidatatmpl",
+            "cat",
+            "/root/.pi/agent/settings.json"
+        ]),
+        "from-host",
+        "pi-agent's config must still be copied when only data is persisted"
+    );
+    assert!(
+        !agent_persist_dir(&s, "real-pidatatmpl", "pi-agent", "config").exists(),
+        "a data-only run must not create pi-agent's config under the data home"
     );
 }
 

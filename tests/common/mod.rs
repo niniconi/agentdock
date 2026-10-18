@@ -1,4 +1,4 @@
-//! Shared test infrastructure for the two docker-facing suites.
+//! Shared test infrastructure for the integration suites.
 //!
 //! `tests/record_image.rs` runs the binary against a stub `docker` whose
 //! calls are recorded, so it can assert on the exact command sequence.
@@ -7,9 +7,13 @@
 //! binary the same way — same arguments, same sandbox layout — because the
 //! thing being tested has to be identical; only the docker side differs.
 //!
+//! `Sandbox::local` needs no docker at all: PATH points at an empty
+//! directory, so a call that unexpectedly reaches docker fails loudly
+//! instead of being answered. `Sandbox::cli` needs the docker binary but no
+//! daemon, for paths that shell out to it without asking anything of a
+//! container. `Sandbox::real` gives the real setup, and returns `None`
+//! (caller should skip) when no daemon is reachable.
 //! `Sandbox::new(label, DockerMode::Stub)` gives the stub setup.
-//! `Sandbox::new(label, DockerMode::Real)` gives the real one, and returns
-//! `None` (caller should skip) when no daemon is reachable.
 
 // Shared between suites; each suite uses only a subset of it.
 #![allow(dead_code)]
@@ -24,6 +28,8 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 pub enum DockerMode {
     Stub,
     Real,
+    Cli,
+    Local,
 }
 
 pub struct Sandbox {
@@ -37,16 +43,41 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
-    pub fn new(label: &str, mode: DockerMode) -> Option<Self> {
-        if mode == DockerMode::Real && !docker_available() {
+    /// A sandbox for paths that need a real daemon. `None` when no daemon is
+    /// reachable, so the caller skips instead of failing.
+    pub fn real(label: &str) -> Option<Self> {
+        if !docker_available() {
             return None;
         }
+        Self::new(label, DockerMode::Real)
+    }
+
+    /// A sandbox for paths that shell out to the docker CLI without needing a
+    /// daemon (an `inspect` of a name that cannot resolve, say). `None` when
+    /// the binary is not installed, so the caller skips there too.
+    pub fn cli(label: &str) -> Option<Self> {
+        if !docker_cli_available() {
+            return None;
+        }
+        Self::new(label, DockerMode::Cli)
+    }
+
+    /// A sandbox for paths that never need docker: the run's PATH leads to an
+    /// empty directory, so reaching docker at all is an error the test sees
+    /// rather than something the sandbox quietly answers.
+    pub fn local(label: &str) -> Self {
+        Self::new(label, DockerMode::Local).expect("local mode always builds")
+    }
+
+    pub fn new(label: &str, mode: DockerMode) -> Option<Self> {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let root = std::env::temp_dir().join(format!(
             "agentdock-{}-{}-{}-{}",
             match mode {
                 DockerMode::Stub => "img",
                 DockerMode::Real => "real",
+                DockerMode::Cli => "cli",
+                DockerMode::Local => "local",
             },
             label,
             std::process::id(),
@@ -56,6 +87,7 @@ impl Sandbox {
         std::fs::create_dir_all(root.join("home/.config/agentdock")).expect("create home");
         std::fs::create_dir_all(root.join("mnt")).expect("create mount");
         std::fs::create_dir_all(root.join("bin")).expect("create bin");
+        std::fs::create_dir_all(root.join("empty-bin")).expect("create empty bin");
 
         let log = root.join("docker.log");
         let running = root.join("running");
@@ -215,38 +247,30 @@ impl Sandbox {
     }
 
     /// The PATH a run gets: in stub mode the fake docker shadows the real one,
-    /// in real mode it is untouched so agentdock reaches the daemon.
+    /// in real and cli mode it is untouched so agentdock reaches the real
+    /// binary, and in local mode it points at an empty directory so reaching
+    /// docker at all is impossible.
     fn path(&self) -> String {
-        let mut path = match self.mode {
-            DockerMode::Stub => self.root.join("bin").to_string_lossy().to_string(),
-            DockerMode::Real => String::new(),
-        };
-        if let Ok(existing) = std::env::var("PATH") {
-            if !path.is_empty() {
-                path.push(':');
+        match self.mode {
+            DockerMode::Stub => {
+                let mut path = self.root.join("bin").to_string_lossy().to_string();
+                if let Ok(existing) = std::env::var("PATH")
+                    && !existing.is_empty()
+                {
+                    path.push(':');
+                    path.push_str(&existing);
+                }
+                path
             }
-            path.push_str(&existing);
+            DockerMode::Real | DockerMode::Cli => std::env::var("PATH").unwrap_or_default(),
+            DockerMode::Local => self.root.join("empty-bin").to_string_lossy().to_string(),
         }
-        path
     }
 
     /// Same as `run`, taking owned strings for scenario vectors.
     pub fn runv(&mut self, args: &[String]) -> Output {
         self.command()
             .env("PATH", self.path())
-            .args(args)
-            .output()
-            .expect("run agentdock")
-    }
-
-    /// Run with a PATH that has no docker on it, the way a machine that never
-    /// installed docker looks. The stub is left off PATH entirely, so a call
-    /// that unexpectedly reaches docker cannot be answered by it.
-    pub fn run_without_docker(&mut self, args: &[&str]) -> Output {
-        let empty = self.root.join("empty-bin");
-        std::fs::create_dir_all(&empty).expect("create empty bin");
-        self.command()
-            .env("PATH", empty)
             .args(args)
             .output()
             .expect("run agentdock")
@@ -286,6 +310,15 @@ impl Drop for Sandbox {
 pub fn docker_available() -> bool {
     Command::new("docker")
         .args(["version", "--format", "{{.Server.Version}}"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Whether the docker binary is on PATH, daemon or not.
+fn docker_cli_available() -> bool {
+    Command::new("docker")
+        .arg("--version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
