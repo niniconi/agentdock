@@ -75,29 +75,24 @@ executed. On a machine without git, the suite reports `ok` in about 0.01s having
 nothing. Do not treat a green suite as proof of anything on such a machine.
 
 `tests/docker_real.rs` is the same shape, pointed at the daemon instead of git: it drives
-the real binary through real containers (local: skips cleanly when no daemon). `tests/record_image.rs` keeps the stub `docker` and remains the place to
-assert exact command sequences. The stub's own assumptions about the daemon (inspect key
-spellings, config keys) are only checkable through `docker_real.rs`, so a change to
-`src/docker/` that touches the daemon interface belongs in both.
+the real binary through real containers (local: skips cleanly when no daemon).
+`tests/local.rs` is the daemon-independent suite: its sandbox's PATH holds no docker at
+all, so a run that unexpectedly reaches docker fails instead of being stubbed. There is no
+stub docker anywhere — what agentdock emits is only ever asserted against the daemon.
 
 **Testing is not optional.** Every behaviour change needs a test that exercises it, in
 the same commit as the implementation. The expected placement, in order of preference:
 
 1. **Real docker** (`tests/docker_real.rs`) for anything that touches a container.
-   This is the default: stub docker cannot verify that what agentdock emits is what the
-   daemon actually does (inspect key spellings, cgroup values, mount destinations, TTY
-   behaviour). It only needs pulling an image and starting a container.
+   This is the default: only the daemon can verify that what agentdock emits is what it
+   actually does (inspect key spellings, cgroup values, mount destinations, TTY
+   behaviour). It only needs pulling an image and starting a container. Cases that shell
+   out to the docker CLI without needing a daemon use `Sandbox::cli`, and skip where the
+   binary is absent.
 2. **Daemon-independent** (`tests/local.rs`) for records parsing, argument validation,
-   path-escape refusal, list formatting — things that never need a live daemon. These
-   still assert against the real binary, just with a stubbed `docker` on PATH.
-3. **Stub docker** (`tests/record_image.rs`) only when the fixture itself is the point:
-   a fabricated `USER`/`HOME` image config, the default-agent name with no real binary,
-   or asserting an exact command sequence we could not observe another way. If one of
-   your cases fits here, say why in the test name or a comment.
-
-The same scenario vector may be asserted in both the stub and the real suite, but the
-stub half adds no behaviour coverage; it only pins the exact arguments. Lead with the
-real test, and do not stop there just because the stub half also exists.
+   path-escape refusal, migrations — things that never need a live daemon. These assert
+   against the real binary with no docker on PATH, so a call that unexpectedly reaches
+   docker is itself a failure.
 
 ## Architecture
 

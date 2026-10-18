@@ -1,18 +1,55 @@
 //! Behavioral tests that need a real daemon.
 //!
-//! These used to run against a stub `docker`; they now assert against the
-//! daemon itself (inspect output, cgroup limits, mount destinations, records
-//! files). Every test returns early (passing) when no daemon is reachable,
-//! so a machine without docker stays green. Shared driving vectors live in
-//! tests/common/scenarios and are mirrored by the stub suite.
+//! Assertions are against the daemon itself (inspect output, cgroup limits,
+//! mount destinations, records files). Every test returns early (passing)
+//! when no daemon is reachable, so a machine without docker stays green.
 
 mod common;
 
-use common::{Sandbox, docker, scenarios, stderr, stdout};
+use common::{Sandbox, docker, stderr, stdout};
 use std::path::PathBuf;
 
 fn sb(label: &str) -> Option<Sandbox> {
     Sandbox::real(label)
+}
+
+/// The invocation vectors shared by tests that drive the same scenario from
+/// more than one angle.
+mod scenarios {
+    pub fn full(name: &str) -> Vec<String> {
+        [
+            "apply",
+            "-a",
+            "alpine:3.20/sh",
+            "-n",
+            name,
+            "-e",
+            "FOO=bar",
+            "--memory",
+            "128m",
+            "--cpus",
+            "1",
+            "--persist",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+    }
+
+    pub fn bare(name: &str) -> Vec<String> {
+        ["apply", "-a", "alpine:3.20/sh", "-n", name]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    pub fn up(name: &str) -> Vec<String> {
+        ["up", "-n", name].iter().map(|s| s.to_string()).collect()
+    }
+
+    pub fn stop(name: &str) -> Vec<String> {
+        ["stop", "-n", name].iter().map(|s| s.to_string()).collect()
+    }
 }
 
 fn real_container_id(name: &str) -> String {
@@ -1085,10 +1122,9 @@ fn list_hides_a_gone_container_unless_all_is_passed() {
     assert!(text.contains("NotFound"), "{text}");
 }
 
-/// The same row vector the stub suite pins, produced on a real daemon: `-v
-/// --format json` is a JSON array and the ports column is the `-P` flag. The
-/// host port is not 8080, which another test binds, so the two can run in
-/// parallel without fighting over it.
+/// `-v --format json` is a JSON array of the row cells, and the ports column
+/// comes from the `-P` flag. The host port is not 8080, which another test
+/// binds, so the two can run in parallel without fighting over it.
 #[test]
 fn list_json_emits_the_rows_as_json_on_a_real_daemon() {
     let Some(mut s) = sb("list-json") else { return };

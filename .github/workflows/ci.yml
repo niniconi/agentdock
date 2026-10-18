@@ -37,7 +37,8 @@ jobs:
 
   # tests/worktree.rs drives git against the real binary, so it is held to a
   # separate job to keep the gate readable when it fails. git comes with the
-  # runner image; no docker is needed because tests/record_image.rs stubs it.
+  # runner image; the few container-attached cases use the runner's docker
+  # and skip cleanly where there is none.
   worktree:
     name: worktree integration
     runs-on: ubuntu-latest

@@ -1,19 +1,17 @@
 //! Shared test infrastructure for the integration suites.
 //!
-//! `tests/record_image.rs` runs the binary against a stub `docker` whose
-//! calls are recorded, so it can assert on the exact command sequence.
-//! `tests/docker_real.rs` runs the same binary against a real daemon, so it
-//! can assert on what the daemon really did. Both suites must drive the
-//! binary the same way — same arguments, same sandbox layout — because the
-//! thing being tested has to be identical; only the docker side differs.
+//! `tests/docker_real.rs` runs the binary against a real daemon, so it can
+//! assert on what the daemon really did; `tests/local.rs` needs no docker at
+//! all. Both must drive the binary the same way — same arguments, same
+//! sandbox layout — because the thing being tested has to be identical;
+//! only the docker side differs.
 //!
-//! `Sandbox::local` needs no docker at all: PATH points at an empty
-//! directory, so a call that unexpectedly reaches docker fails loudly
-//! instead of being answered. `Sandbox::cli` needs the docker binary but no
-//! daemon, for paths that shell out to it without asking anything of a
-//! container. `Sandbox::real` gives the real setup, and returns `None`
-//! (caller should skip) when no daemon is reachable.
-//! `Sandbox::new(label, DockerMode::Stub)` gives the stub setup.
+//! `Sandbox::local` needs no docker: PATH points at an empty directory, so a
+//! call that unexpectedly reaches docker fails loudly instead of being
+//! answered. `Sandbox::cli` needs the docker binary but no daemon, for paths
+//! that shell out to it without asking anything of a container.
+//! `Sandbox::real` gives the real setup, and returns `None` (caller should
+//! skip) when no daemon is reachable.
 
 // Shared between suites; each suite uses only a subset of it.
 #![allow(dead_code)]
@@ -25,8 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum DockerMode {
-    Stub,
+enum Mode {
     Real,
     Cli,
     Local,
@@ -34,11 +31,7 @@ pub enum DockerMode {
 
 pub struct Sandbox {
     pub root: PathBuf,
-    pub mode: DockerMode,
-    pub log: PathBuf,
-    pub running: PathBuf,
-    pull_fail: PathBuf,
-    gone: PathBuf,
+    mode: Mode,
     containers: Vec<String>,
 }
 
@@ -49,7 +42,7 @@ impl Sandbox {
         if !docker_available() {
             return None;
         }
-        Self::new(label, DockerMode::Real)
+        Some(Self::new(label, Mode::Real))
     }
 
     /// A sandbox for paths that shell out to the docker CLI without needing a
@@ -59,25 +52,24 @@ impl Sandbox {
         if !docker_cli_available() {
             return None;
         }
-        Self::new(label, DockerMode::Cli)
+        Some(Self::new(label, Mode::Cli))
     }
 
     /// A sandbox for paths that never need docker: the run's PATH leads to an
     /// empty directory, so reaching docker at all is an error the test sees
     /// rather than something the sandbox quietly answers.
     pub fn local(label: &str) -> Self {
-        Self::new(label, DockerMode::Local).expect("local mode always builds")
+        Self::new(label, Mode::Local)
     }
 
-    pub fn new(label: &str, mode: DockerMode) -> Option<Self> {
+    fn new(label: &str, mode: Mode) -> Self {
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let root = std::env::temp_dir().join(format!(
             "agentdock-{}-{}-{}-{}",
             match mode {
-                DockerMode::Stub => "img",
-                DockerMode::Real => "real",
-                DockerMode::Cli => "cli",
-                DockerMode::Local => "local",
+                Mode::Real => "real",
+                Mode::Cli => "cli",
+                Mode::Local => "local",
             },
             label,
             std::process::id(),
@@ -86,64 +78,13 @@ impl Sandbox {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("home/.config/agentdock")).expect("create home");
         std::fs::create_dir_all(root.join("mnt")).expect("create mount");
-        std::fs::create_dir_all(root.join("bin")).expect("create bin");
         std::fs::create_dir_all(root.join("empty-bin")).expect("create empty bin");
 
-        let log = root.join("docker.log");
-        let running = root.join("running");
-        let pull_fail = root.join("pull_fail");
-        let gone = root.join("gone");
-        let env_file = root.join("image_env");
-        let id_file = root.join("image_id");
-        std::fs::write(&env_file, "{}\n").expect("write image env");
-        // A stable id by default, so `update` sees an unchanged tag until a test
-        // repoints it with `set_image_id`.
-        std::fs::write(
-            &id_file,
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
-        )
-        .expect("write image id");
-
-        if mode == DockerMode::Stub {
-            let stub = format!(
-                "#!/bin/sh\n\
-                 echo \"docker $*\" >> \"{log}\"\n\
-                 case \"$1 $2\" in\n\
-                 'image inspect') if [ \"$4\" = \"{{{{.Id}}}}\" ]; then cat \"{id_file}\"; else cat \"{env_file}\"; fi ;;\n\
-                 esac\n\
-                 case \"$1\" in\n\
-                 inspect) if [ -f \"{gone}\" ]; then exit 1; fi; if [ -f \"{running}\" ]; then echo true; else echo false; fi ;;\n\
-                 run) shift; while [ $# -gt 0 ]; do case \"$1\" in -d) touch \"{running}\"; exit 0;; esac; shift; done; exit 0 ;;\n\
-                 stop) rm -f \"{running}\"; exit 0 ;;\n\
-                 pull) if [ -f \"{pull_fail}\" ]; then echo 'pull access denied' >&2; exit 1; fi; exit 0 ;;\n\
-                 *) exit 0 ;;\n\
-                 esac\n",
-                log = log.display(),
-                running = running.display(),
-                pull_fail = pull_fail.display(),
-                gone = gone.display(),
-                env_file = env_file.display(),
-                id_file = id_file.display()
-            );
-            let stub_path = root.join("bin/docker");
-            std::fs::write(&stub_path, stub).expect("write stub");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&stub_path, std::fs::Permissions::from_mode(0o755))
-                    .expect("chmod stub");
-            }
-        }
-
-        Some(Sandbox {
+        Sandbox {
             root,
             mode,
-            log,
-            running,
-            pull_fail,
-            gone,
             containers: Vec::new(),
-        })
+        }
     }
 
     pub fn mount(&self) -> PathBuf {
@@ -172,30 +113,6 @@ impl Sandbox {
             .expect("write records");
     }
 
-    pub fn set_image_config(&self, json: &str) {
-        std::fs::write(self.root.join("image_env"), format!("{json}\n")).expect("write env");
-    }
-
-    /// Repoint the image id the stub reports for `docker image inspect {{.Id}}`.
-    /// A different value stands for a tag that now resolves to a newer build.
-    pub fn set_image_id(&self, id: &str) {
-        std::fs::write(self.root.join("image_id"), format!("{id}\n")).expect("write image id");
-    }
-
-    /// Make the stub's next `docker pull` fail, the way a registry rejecting an
-    /// unknown image does. Used to assert `update` does not destroy a container
-    /// when it cannot fetch a replacement.
-    pub fn set_pull_failure(&self) {
-        std::fs::write(&self.pull_fail, "").expect("write pull failure marker");
-    }
-
-    /// Make the stub's `docker inspect` fail for any container, the way one
-    /// removed outside agentdock does. Used to assert `update` reports a missing
-    /// container the same way `up` does, before it touches it.
-    pub fn set_container_gone(&self) {
-        std::fs::write(&self.gone, "").expect("write gone marker");
-    }
-
     pub fn persist_dir(&self, container: &str, kind: &str) -> PathBuf {
         self.persist_dir_for(container, "opencode", kind)
     }
@@ -206,18 +123,6 @@ impl Sandbox {
             .join(container)
             .join(agent)
             .join(kind)
-    }
-
-    pub fn mark_running(&self) {
-        let _ = std::fs::write(&self.running, "");
-    }
-
-    pub fn reset_log(&self) {
-        let _ = std::fs::remove_file(&self.log);
-    }
-
-    pub fn log(&self) -> String {
-        std::fs::read_to_string(&self.log).unwrap_or_default()
     }
 
     /// Run agentdock with the given arguments.
@@ -246,24 +151,13 @@ impl Sandbox {
         cmd
     }
 
-    /// The PATH a run gets: in stub mode the fake docker shadows the real one,
-    /// in real and cli mode it is untouched so agentdock reaches the real
-    /// binary, and in local mode it points at an empty directory so reaching
-    /// docker at all is impossible.
+    /// The PATH a run gets: untouched for real and cli sandboxes, so agentdock
+    /// reaches the real binary; an empty directory for a local one, so
+    /// reaching docker at all is impossible.
     fn path(&self) -> String {
         match self.mode {
-            DockerMode::Stub => {
-                let mut path = self.root.join("bin").to_string_lossy().to_string();
-                if let Ok(existing) = std::env::var("PATH")
-                    && !existing.is_empty()
-                {
-                    path.push(':');
-                    path.push_str(&existing);
-                }
-                path
-            }
-            DockerMode::Real | DockerMode::Cli => std::env::var("PATH").unwrap_or_default(),
-            DockerMode::Local => self.root.join("empty-bin").to_string_lossy().to_string(),
+            Mode::Real | Mode::Cli => std::env::var("PATH").unwrap_or_default(),
+            Mode::Local => self.root.join("empty-bin").to_string_lossy().to_string(),
         }
     }
 
@@ -288,9 +182,10 @@ impl Sandbox {
             .expect("run agentdock")
     }
 
-    /// Track a real container name for cleanup; a no-op in stub mode.
+    /// Track a real container name for cleanup; a no-op where no daemon
+    /// exists to have made one.
     pub fn track(&mut self, name: &str) {
-        if self.mode == DockerMode::Real {
+        if self.mode == Mode::Real {
             self.containers.push(name.to_string());
         }
     }
@@ -298,7 +193,7 @@ impl Sandbox {
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
-        if self.mode == DockerMode::Real {
+        if self.mode == Mode::Real {
             for name in &self.containers {
                 let _ = Command::new("docker").args(["rm", "-f", name]).output();
             }
@@ -307,7 +202,8 @@ impl Drop for Sandbox {
     }
 }
 
-pub fn docker_available() -> bool {
+/// Whether a daemon is reachable, not just installed.
+fn docker_available() -> bool {
     Command::new("docker")
         .args(["version", "--format", "{{.Server.Version}}"])
         .output()
@@ -345,43 +241,4 @@ pub fn stdout(out: &Output) -> String {
 
 pub fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).to_string()
-}
-
-/// Scenarios every docker-facing suite drives, so stub and real tests invoke
-/// agentdock with exactly the same arguments.
-pub mod scenarios {
-    pub fn full(name: &str) -> Vec<String> {
-        [
-            "apply",
-            "-a",
-            "alpine:3.20/sh",
-            "-n",
-            name,
-            "-e",
-            "FOO=bar",
-            "--memory",
-            "128m",
-            "--cpus",
-            "1",
-            "--persist",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
-    }
-
-    pub fn bare(name: &str) -> Vec<String> {
-        ["apply", "-a", "alpine:3.20/sh", "-n", name]
-            .iter()
-            .map(|s| s.to_string())
-            .collect()
-    }
-
-    pub fn up(name: &str) -> Vec<String> {
-        ["up", "-n", name].iter().map(|s| s.to_string()).collect()
-    }
-
-    pub fn stop(name: &str) -> Vec<String> {
-        ["stop", "-n", name].iter().map(|s| s.to_string()).collect()
-    }
 }
