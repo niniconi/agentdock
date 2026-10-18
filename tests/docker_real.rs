@@ -214,12 +214,26 @@ fn an_omitted_flag_turns_the_setting_off() {
         "8080:80",
         "--http-proxy",
         "http://p:3128",
+        "-e",
+        "FOO=bar",
+        "--memory",
+        "128m",
+        "--cpus",
+        "1",
     ]);
 
     s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-override"]);
 
     let env = docker(&["inspect", "-f", "{{json .Config.Env}}", "real-override"]);
     assert!(!env.contains("HTTP_PROXY"), "proxy survived: {env}");
+    assert!(!env.contains("FOO=bar"), "an env var survived: {env}");
+    let limits = docker(&[
+        "inspect",
+        "-f",
+        "{{.HostConfig.Memory}} {{.HostConfig.NanoCpus}}",
+        "real-override",
+    ]);
+    assert_eq!(limits, "0 0", "a resource limit survived the bare apply");
     let ports = docker(&[
         "inspect",
         "-f",
@@ -229,6 +243,16 @@ fn an_omitted_flag_turns_the_setting_off() {
     assert!(!ports.contains("8080"), "port survived: {ports}");
     assert!(!s.records().contains("HTTP_PROXY"), "{}", s.records());
     assert!(!s.records().contains("8080:80"), "{}", s.records());
+    // The fields are optional and skipped when unset, so their absence from
+    // the rewritten record is the flag having been turned off.
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    let record = &records["records"]["real-override"];
+    for field in ["envs", "memory", "cpus"] {
+        assert!(
+            record.get(field).is_none(),
+            "{field} survived the bare apply: {record}"
+        );
+    }
 }
 
 /// `--env-file` is parsed by agentdock itself, not handed to docker, so the
@@ -2131,6 +2155,65 @@ fn update_dry_run_reports_without_recreating() {
     let _ = std::process::Command::new("docker")
         .args(["rmi", "-f", "agentdock-update-dry:1"])
         .output();
+}
+
+/// A dry run refreshes the tag the same way a real update does — the id it
+/// reports on is only known after the pull — so `--no-pull` is the only way to
+/// have it report on what is already on disk. A tag that exists only locally
+/// therefore fails the default dry run, and reports the rebuild without it.
+#[test]
+fn update_dry_run_pulls_the_tag_by_default() {
+    let Some(mut s) = sb("update-drypull") else {
+        return;
+    };
+    s.track("real-updatedrypull");
+    build_image(&s, "agentdock-probe-drypull:1", "FROM alpine:3.20\n");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "agentdock-probe-drypull:1/sh",
+        "-n",
+        "real-updatedrypull",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let first = real_container_id("real-updatedrypull");
+
+    // Repointed locally: a dry run that skipped the pull would see the fresh id
+    // and report the rebuild, which is exactly what must not happen behind the
+    // default.
+    build_image(
+        &s,
+        "agentdock-probe-drypull:1",
+        "FROM alpine:3.20\nRUN true\n",
+    );
+
+    let out = s.run(&["update", "-n", "real-updatedrypull", "--dry-run"]);
+    assert!(
+        !out.status.success(),
+        "the default dry run must refresh the tag, and this one is not in a registry"
+    );
+
+    let out = s.run(&[
+        "update",
+        "-n",
+        "real-updatedrypull",
+        "--dry-run",
+        "--no-pull",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("would be recreated"),
+        "{}",
+        stdout(&out)
+    );
+    assert_eq!(
+        real_container_id("real-updatedrypull"),
+        first,
+        "a dry run must not rebuild the container"
+    );
+
+    remove_image("agentdock-probe-drypull:1");
 }
 
 /// A record written before `update` existed carries no image id, so it cannot be
