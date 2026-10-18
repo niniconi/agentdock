@@ -897,6 +897,33 @@ fn init_refuses_a_detached_head() {
     assert!(repo.join(".git").is_dir(), "the repo was moved anyway");
 }
 
+/// git has to be reported by name when PATH has none, before anything moves.
+#[test]
+fn init_reports_a_missing_git() {
+    let Some(sb) = Sandbox::new("missinggit") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    let empty = sb.path("empty-bin");
+    std::fs::create_dir_all(&empty).expect("empty bin");
+
+    // A PATH without git, the way a machine that never installed it looks.
+    let out = Command::new(env!("CARGO_BIN_EXE_agentdock"))
+        .current_dir(&repo)
+        .args(["worktree", "init"])
+        .env("HOME", sb.home())
+        .env("PATH", &empty)
+        .output()
+        .expect("run agentdock");
+    assert!(!out.status.success(), "init succeeded without git");
+    assert!(
+        stderr(&out).contains("git is not installed or not on PATH"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(repo.join(".git").is_dir(), "the repo was moved anyway");
+}
+
 #[test]
 fn add_refuses_start_point_on_an_existing_branch() {
     let Some(sb) = Sandbox::new("sp-existing") else {

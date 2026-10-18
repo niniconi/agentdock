@@ -193,10 +193,30 @@ impl Sandbox {
         self.runv(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
     }
 
-    /// Same as `run`, taking owned strings for scenario vectors.
-    pub fn runv(&mut self, args: &[String]) -> Output {
-        // In stub mode the fake docker shadows the real one on PATH. In real
-        // mode the PATH is untouched, so agentdock reaches the daemon.
+    /// The command every run starts from: the binary, run from the mount, with
+    /// the sandbox's own HOME and XDG variables.
+    ///
+    /// The sandbox owns the whole environment the binary resolves paths from,
+    /// not just HOME. CI images bake XDG_CONFIG_HOME into /etc/environment
+    /// pointing at the runner's own home, so leaving it alone would read a
+    /// config that exists nowhere in the sandbox; PI_CODING_AGENT_DIR is
+    /// pinned for the same reason, since a leaked one would move Pi's source
+    /// out from under the test. The pinned values equal the binary's own
+    /// defaults, so a bare HOME-only environment still resolves to the same
+    /// paths.
+    fn command(&self) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_agentdock"));
+        cmd.current_dir(self.mount())
+            .env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", self.root.join("home/.config"))
+            .env("XDG_DATA_HOME", self.root.join("home/.local/share"))
+            .env("PI_CODING_AGENT_DIR", self.root.join("home/.pi/agent"));
+        cmd
+    }
+
+    /// The PATH a run gets: in stub mode the fake docker shadows the real one,
+    /// in real mode it is untouched so agentdock reaches the daemon.
+    fn path(&self) -> String {
         let mut path = match self.mode {
             DockerMode::Stub => self.root.join("bin").to_string_lossy().to_string(),
             DockerMode::Real => String::new(),
@@ -207,22 +227,38 @@ impl Sandbox {
             }
             path.push_str(&existing);
         }
+        path
+    }
 
-        // The sandbox owns the whole environment the binary resolves paths from,
-        // not just HOME. CI images bake XDG_CONFIG_HOME into /etc/environment
-        // pointing at the runner's own home, so leaving it alone would read a
-        // config that exists nowhere in the sandbox; PI_CODING_AGENT_DIR is
-        // pinned for the same reason, since a leaked one would move Pi's source
-        // out from under the test. The pinned values equal the binary's own
-        // defaults, so a bare HOME-only environment still resolves to the same
-        // paths.
-        Command::new(env!("CARGO_BIN_EXE_agentdock"))
-            .current_dir(self.mount())
-            .env("HOME", self.root.join("home"))
-            .env("XDG_CONFIG_HOME", self.root.join("home/.config"))
-            .env("XDG_DATA_HOME", self.root.join("home/.local/share"))
-            .env("PI_CODING_AGENT_DIR", self.root.join("home/.pi/agent"))
-            .env("PATH", path)
+    /// Same as `run`, taking owned strings for scenario vectors.
+    pub fn runv(&mut self, args: &[String]) -> Output {
+        self.command()
+            .env("PATH", self.path())
+            .args(args)
+            .output()
+            .expect("run agentdock")
+    }
+
+    /// Run with a PATH that has no docker on it, the way a machine that never
+    /// installed docker looks. The stub is left off PATH entirely, so a call
+    /// that unexpectedly reaches docker cannot be answered by it.
+    pub fn run_without_docker(&mut self, args: &[&str]) -> Output {
+        let empty = self.root.join("empty-bin");
+        std::fs::create_dir_all(&empty).expect("create empty bin");
+        self.command()
+            .env("PATH", empty)
+            .args(args)
+            .output()
+            .expect("run agentdock")
+    }
+
+    /// Run with a relative HOME and no XDG_DATA_HOME, so resolving agentdock's
+    /// own data home has nothing absolute to stand on.
+    pub fn run_without_an_absolute_home(&mut self, args: &[&str]) -> Output {
+        self.command()
+            .env("HOME", "relative-home")
+            .env_remove("XDG_DATA_HOME")
+            .env("PATH", self.path())
             .args(args)
             .output()
             .expect("run agentdock")

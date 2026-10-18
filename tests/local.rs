@@ -283,6 +283,52 @@ fn stop_unknown_name_explains_it() {
     assert!(stderr.contains("apply"), "{stderr}");
 }
 
+/// docker has to be reported by name when PATH has none, before anything is
+/// created, rather than surfacing as a bare OS error late in the run.
+#[test]
+fn a_missing_docker_is_named() {
+    let mut sb = sandbox("no-docker");
+    let out = sb.run_without_docker(&["apply", "-a", "img/opencode", "-n", "box"]);
+    assert!(!out.status.success(), "apply succeeded without docker");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("docker is not installed or not on PATH"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(sb.records().is_empty(), "a record was written anyway");
+}
+
+/// `--persist` needs the data home, and with a relative HOME and no
+/// XDG_DATA_HOME there is nothing to derive it from: the failure must name the
+/// problem before docker is reached.
+#[test]
+fn a_relative_home_cannot_host_the_data_directory() {
+    let mut sb = sandbox("no-home");
+    let out =
+        sb.run_without_an_absolute_home(&["apply", "-a", "img/opencode", "-n", "box", "--persist"]);
+    assert!(
+        !out.status.success(),
+        "persist succeeded without a data home"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("Cannot work out where to keep agentdock's own data"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !sb.log().contains("docker run"),
+        "docker was reached before the data home failed: {}",
+        sb.log()
+    );
+    assert!(
+        !sb.mount()
+            .join("relative-home/.config/agentdock/records.json")
+            .exists(),
+        "a record was written into a relative home"
+    );
+}
+
 /// The image tag and the id `update` compares are both recorded at creation and
 /// shown to the user, so both have to survive a round trip through the records
 /// file. The tag is asserted with a name that appears nowhere else in the row,
