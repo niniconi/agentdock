@@ -13,14 +13,22 @@ use crate::persist::Mount;
 ///
 /// Without this, an absent docker surfaces as "No such file or directory",
 /// which reads as if the container had no command rather than docker missing.
+/// Turn a failed spawn into the named error every docker path reports, so a
+/// missing binary never surfaces as a bare OS error. `docker()` captures output
+/// and the interactive `exec` cannot share that call, but they can share this.
+fn spawn_error(e: std::io::Error) -> anyhow::Error {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        ContainerError::ToolMissing.into()
+    } else {
+        anyhow::Error::new(e).context("Failed to execute docker")
+    }
+}
+
 fn docker(args: &[&str]) -> Result<Output> {
-    Command::new("docker").args(args).output().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ContainerError::ToolMissing.into()
-        } else {
-            anyhow::Error::new(e).context("Failed to execute docker")
-        }
-    })
+    Command::new("docker")
+        .args(args)
+        .output()
+        .map_err(spawn_error)
 }
 
 /// Bail with the docker command's own stderr, trimmed of its trailing newline.
@@ -176,7 +184,8 @@ impl DockerClient {
     pub fn exec_script(name: &str, command: &str) -> Result<()> {
         let status = Command::new("docker")
             .args(["exec", name, "sh", "-c", command])
-            .status()?;
+            .status()
+            .map_err(spawn_error)?;
 
         if !status.success() {
             bail!(ContainerError::ExecFailed {
@@ -195,7 +204,8 @@ impl DockerClient {
         let status = Command::new("docker")
             .args(args)
             .args([name, "sh", "-c", command])
-            .status()?;
+            .status()
+            .map_err(spawn_error)?;
 
         if !status.success() {
             bail!(ContainerError::ExecFailed {
@@ -397,5 +407,26 @@ mod tests {
         // Shorter than twelve is returned as-is, not padded or emptied.
         assert_eq!(short_image_id("sha256:abc"), "abc");
         assert_eq!(short_image_id(""), "");
+    }
+
+    /// Every way of starting docker has to name a missing binary the same way.
+    /// Only `docker()` used to; `exec`/`exec_script` spawn without capturing
+    /// output and surfaced the bare OS error instead.
+    #[test]
+    fn a_missing_docker_is_named_wherever_it_is_spawned() {
+        let missing = spawn_error(std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert!(
+            missing
+                .to_string()
+                .contains("docker is not installed or not on PATH"),
+            "{missing}"
+        );
+
+        let denied = spawn_error(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert_eq!(
+            denied.to_string(),
+            "Failed to execute docker",
+            "other spawn failures keep their own message"
+        );
     }
 }
