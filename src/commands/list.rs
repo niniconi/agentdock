@@ -16,7 +16,10 @@ pub fn execute_list(args: ListArgs) -> Result<()> {
     let mut rows: Vec<Vec<String>> = Vec::new();
 
     for (name, record) in records {
-        let status = DockerClient::inspect(name).unwrap_or(ContainerStatus::NotFound);
+        // A docker that cannot be run is a failure to report, not a container
+        // that is missing: treating the two the same would print an empty table
+        // for a user whose records still name real containers.
+        let status = DockerClient::inspect(name)?;
 
         if !args.all && matches!(status, ContainerStatus::NotFound) {
             continue;

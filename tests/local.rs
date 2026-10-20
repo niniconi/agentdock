@@ -234,6 +234,32 @@ fn a_missing_docker_is_named() {
     assert!(sb.records().is_empty(), "a record was written anyway");
 }
 
+/// `list` asks docker about every record, so a docker that cannot be run is a
+/// failure to report rather than an empty table: falling back to "nothing
+/// found" hides containers the user does have.
+#[test]
+fn list_names_a_missing_docker_instead_of_reporting_no_containers() {
+    let mut sb = sandbox("list-no-docker");
+    sb.write_records(&format!(
+        r#"{{"records":{{"box":{{"path":"{mnt}","created_at":"2026-01-01T00:00:00+00:00","docker_image":"img","agent_name":"opencode","kvm":false}}}}}}"#,
+        mnt = sb.mount().display()
+    ));
+
+    let out = sb.run(&["list"]);
+
+    assert!(!out.status.success(), "list succeeded without docker");
+    assert!(
+        stderr(&out).contains("docker is not installed or not on PATH"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        !stdout(&out).contains("No managed containers found"),
+        "the failure was reported as an empty table: {}",
+        stdout(&out)
+    );
+}
+
 /// `--persist` needs the data home, and with a relative HOME and no
 /// XDG_DATA_HOME there is nothing to derive it from: the failure must name the
 /// problem before docker is reached.
@@ -265,8 +291,15 @@ fn startup_migrates_an_unstamped_records_file() {
     std::fs::create_dir_all(sb.root.join("home/.local/share/agentdock/box")).expect("data home");
     sb.write_records(r#"{"records":{"box":{"path":"/tmp","created_at":"x","docker_image":"img","agent_name":"a","kvm":false}}}"#);
 
-    let out = sb.run(&["list"]);
-    assert!(out.status.success(), "{}", stderr(&out));
+    // `list` now names a missing docker rather than reporting an empty table, so
+    // the migration is exercised through `status`, which fails on the unknown
+    // name before it would reach docker.
+    let out = sb.run(&["status", "ghost"]);
+    assert!(
+        stderr(&out).contains("ghost"),
+        "expected the unknown-name error: {}",
+        stderr(&out)
+    );
 
     let records = sb.records();
     assert!(
