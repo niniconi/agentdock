@@ -1,4 +1,5 @@
 use anyhow::Result;
+use unicode_width::UnicodeWidthStr;
 
 use crate::cli::ListArgs;
 use crate::docker::{ContainerStatus, DockerClient, short_image_id};
@@ -127,35 +128,98 @@ fn persisted(name: &str, record: &crate::state::Record) -> String {
 }
 
 pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
-    let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+    print!("{}", render_table(headers, rows));
+}
+
+/// Render the table with every column as wide as its widest cell in **display**
+/// columns, not bytes or characters: a path holding CJK text takes two columns
+/// per character, and padding by either count would misalign the rows.
+pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    let mut widths: Vec<usize> = headers
+        .iter()
+        .map(|header| UnicodeWidthStr::width(*header))
+        .collect();
 
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
             if i < widths.len() {
-                widths[i] = widths[i].max(cell.len());
+                widths[i] = widths[i].max(UnicodeWidthStr::width(cell.as_str()));
             }
         }
     }
+
+    let mut out = String::new();
 
     for (i, header) in headers.iter().enumerate() {
-        print!("{:<width$}  ", header, width = widths[i]);
-    }
-    println!();
-
-    for (i, _) in widths.iter().enumerate() {
-        print!("{}", "-".repeat(widths[i]));
-        if i < widths.len() - 1 {
-            print!("  ");
+        if i > 0 {
+            out.push_str("  ");
         }
+        push_cell(&mut out, header, widths[i]);
     }
-    println!();
+    out.push('\n');
+
+    for (i, width) in widths.iter().enumerate() {
+        if i > 0 {
+            out.push_str("  ");
+        }
+        out.push_str(&"-".repeat(*width));
+    }
+    out.push('\n');
 
     for row in rows {
-        for (i, cell) in row.iter().enumerate() {
-            if i < widths.len() {
-                print!("{:<width$}  ", cell, width = widths[i]);
+        for (i, width) in widths.iter().enumerate() {
+            if i > 0 {
+                out.push_str("  ");
             }
+            push_cell(
+                &mut out,
+                row.get(i).map(String::as_str).unwrap_or(""),
+                *width,
+            );
         }
-        println!();
+        out.push('\n');
+    }
+
+    out
+}
+
+fn push_cell(out: &mut String, cell: &str, width: usize) {
+    out.push_str(cell);
+    out.push_str(&" ".repeat(width.saturating_sub(UnicodeWidthStr::width(cell))));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every line must come out the same display width. Padding by bytes or by
+    /// characters would misalign the row holding the CJK path.
+    #[test]
+    fn columns_are_as_wide_as_their_widest_cell() {
+        let table = render_table(
+            &["NAME", "PATH"],
+            &[
+                vec!["box".to_string(), "/tmp/项目".to_string()],
+                vec!["longer".to_string(), "/tmp/plain".to_string()],
+            ],
+        );
+
+        let lines: Vec<&str> = table.lines().collect();
+        assert_eq!(lines.len(), 4);
+
+        let expected = UnicodeWidthStr::width(lines[0]);
+        for line in &lines {
+            assert_eq!(
+                UnicodeWidthStr::width(*line),
+                expected,
+                "line is not aligned: {line:?} in {table:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_last_column_carries_no_padding() {
+        let table = render_table(&["A"], &[vec!["x".to_string()]]);
+        assert_eq!(table, "A\n-\nx\n");
     }
 }

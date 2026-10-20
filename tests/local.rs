@@ -170,6 +170,26 @@ fn apply_rejects_an_invalid_memory_and_cpus() {
 }
 
 #[test]
+fn an_unknown_format_is_rejected_before_anything_runs() {
+    let mut sb = sandbox("bad-format");
+
+    for args in [
+        &["list", "--format", "yaml"][..],
+        &["worktree", "list", "--format", "yaml"][..],
+    ] {
+        let out = sb.run(args);
+        // clap's usage error, and not a table: an unknown format used to fall
+        // through to the table renderer silently.
+        assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains("possible values: table, json"),
+            "{}",
+            stderr(&out)
+        );
+    }
+}
+
+#[test]
 fn init_with_a_missing_file_fails_before_creating_anything() {
     let mut sb = sandbox("init-missing");
     let out = sb.run(&["apply", "-a", "img/agent", "-n", "box", "--init", "nope.sh"]);

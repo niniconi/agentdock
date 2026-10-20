@@ -227,7 +227,7 @@ pub struct ListArgs {
     pub verbose: bool,
 
     /// Output format (table, json)
-    #[arg(short, long, default_value = "table")]
+    #[arg(short, long, default_value = "table", value_parser = ["table", "json"])]
     pub format: String,
 }
 
@@ -291,7 +291,7 @@ pub struct WorktreeAddArgs {
 #[derive(Parser)]
 pub struct WorktreeListArgs {
     /// Output format (table, json)
-    #[arg(short, long, default_value = "table")]
+    #[arg(short, long, default_value = "table", value_parser = ["table", "json"])]
     pub format: String,
 }
 
