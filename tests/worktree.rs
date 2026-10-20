@@ -737,9 +737,8 @@ fn add_apply_creates_a_container_bound_to_the_worktree() {
     );
 }
 
-/// `rm --force` on a worktree with an attached container removes the record and
-/// keeps the persisted data, saying where it is; the container itself is left
-/// for `delete`. Skipped without a daemon.
+/// `rm --force` on a worktree with an attached container removes the container
+/// too, keeps the persisted data and says where it is. Skipped without a daemon.
 #[test]
 fn rm_force_removes_the_record_and_keeps_persisted_data() {
     if !docker_available() {
@@ -795,12 +794,26 @@ fn rm_force_removes_the_record_and_keeps_persisted_data() {
         text.contains("Removed container record: proj-feat"),
         "{text}"
     );
+    assert!(
+        text.contains("Docker container removed: proj-feat"),
+        "{text}"
+    );
     assert!(text.contains("persisted data kept at:"), "{text}");
     assert!(
         data.is_dir(),
         "the data was removed along with the worktree"
     );
     assert!(!sb.path("proj/proj-feat").exists(), "worktree survived");
+
+    let container = Command::new("docker")
+        .args(["inspect", "proj-feat"])
+        .output()
+        .expect("inspect the container");
+    assert!(
+        !container.status.success(),
+        "the container outlived the worktree: {}",
+        String::from_utf8_lossy(&container.stderr)
+    );
 
     let left = stdout(&agentdock(
         &main,

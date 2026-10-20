@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::cli::{WorktreeAddArgs, WorktreeListArgs, WorktreeRmArgs};
+use crate::docker::{ContainerStatus, DockerClient};
 use crate::error::{ContainerError, WorktreeError, format_conflicts};
 use crate::state::StateManager;
 
@@ -525,20 +526,20 @@ pub fn rm(args: &WorktreeRmArgs) -> Result<()> {
         .find_by_path(&target.path)
         .map(|(name, _)| name.to_string());
 
-    if let Some(name) = attached {
+    if let Some(name) = &attached {
         if !args.force {
             bail!(ContainerError::Attached {
-                name,
+                name: name.clone(),
                 path: target.path,
             });
         }
-        state.remove(&name);
+        state.remove(name);
         state.save()?;
         println!("Removed container record: {}", name);
         // Same reason delete does not: the data is outside the container, so
         // this says where it is rather than removing it. Removing a worktree is
         // already destructive to the checkout beside it.
-        if let Ok(dir) = crate::persist::container_data_dir(&name)
+        if let Ok(dir) = crate::persist::container_data_dir(name)
             && dir.exists()
         {
             println!("  persisted data kept at: {}", dir.display());
@@ -547,6 +548,22 @@ pub fn rm(args: &WorktreeRmArgs) -> Result<()> {
 
     git::worktree_remove(&main, &target.path, args.force)?;
     println!("Worktree removed: {}", target.path.display());
+
+    if let Some(name) = &attached {
+        // Only after the worktree is gone: if git refuses, the container still
+        // serves the checkout it was told to remove. The record has already
+        // been dropped by then, so a failure here cannot be retried through
+        // agentdock; warn with the command that removes it by hand instead.
+        if !matches!(DockerClient::inspect(name), Ok(ContainerStatus::NotFound)) {
+            match DockerClient::destroy(name) {
+                Ok(()) => println!("Docker container removed: {}", name),
+                Err(e) => {
+                    println!("warning    : could not remove container {}, {}", name, e);
+                    println!("             remove it with: docker rm -f {}", name);
+                }
+            }
+        }
+    }
 
     Ok(())
 }
