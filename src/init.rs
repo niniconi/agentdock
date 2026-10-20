@@ -14,14 +14,19 @@ pub fn run_init_script(name: &str, init_content: Option<&str>) -> Result<()> {
         std::fs::write(&tmp_path, content)
             .with_context(|| format!("Failed to write temp file: {}", tmp_path.display()))?;
 
+        // The container can reject the copy or the script itself, so the file
+        // has to be removed on those paths too rather than only after a
+        // successful run: one failed apply would otherwise leave it behind.
         println!("Copying init script to container...");
-        DockerClient::cp(name, &tmp_path, "/tmp/init.sh")
-            .with_context(|| format!("Failed to copy init script from: {}", tmp_path.display()))?;
-
-        println!("Executing init script...");
-        DockerClient::exec_script(name, "chmod +x /tmp/init.sh && /tmp/init.sh")?;
+        let result = DockerClient::cp(name, &tmp_path, "/tmp/init.sh")
+            .with_context(|| format!("Failed to copy init script from: {}", tmp_path.display()))
+            .and_then(|()| {
+                println!("Executing init script...");
+                DockerClient::exec_script(name, "chmod +x /tmp/init.sh && /tmp/init.sh")
+            });
 
         let _ = std::fs::remove_file(&tmp_path);
+        result?;
     }
     Ok(())
 }

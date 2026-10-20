@@ -147,7 +147,10 @@ impl Sandbox {
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("home/.config"))
             .env("XDG_DATA_HOME", self.root.join("home/.local/share"))
-            .env("PI_CODING_AGENT_DIR", self.root.join("home/.pi/agent"));
+            .env("PI_CODING_AGENT_DIR", self.root.join("home/.pi/agent"))
+            // A private temp dir, so a test can assert what the binary left
+            // behind without racing the other tests sharing /tmp.
+            .env("TMPDIR", &self.root);
         cmd
     }
 

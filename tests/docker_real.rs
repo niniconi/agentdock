@@ -1253,6 +1253,43 @@ fn init_runs_the_script_inside_the_container() {
     assert_eq!(check, "", "init script did not run");
 }
 
+/// A script that exits nonzero fails the apply, and the copy staged in the
+/// host's temp dir is removed on that path too: it used to be cleaned up only
+/// after a successful run, leaving one file per failed apply.
+#[test]
+fn a_failing_init_script_leaves_no_temp_file_behind() {
+    let Some(mut s) = sb("init-failure") else {
+        return;
+    };
+    s.track("real-initfail");
+    std::fs::write(s.mount().join("boom.sh"), "echo broke >&2\nexit 7\n").expect("write init");
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "alpine:3.20/sh",
+        "-n",
+        "real-initfail",
+        "--init",
+        "boom.sh",
+    ]);
+    assert!(
+        !out.status.success(),
+        "a failing init script must fail the apply"
+    );
+
+    let leftovers: Vec<String> = std::fs::read_dir(&s.root)
+        .expect("read sandbox")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .filter(|name| name.starts_with("agentdock_init_"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "temp files left behind: {leftovers:?}"
+    );
+}
+
 #[test]
 fn persist_follows_the_images_declared_home_on_a_real_daemon() {
     let Some(mut s) = sb("nonroot") else { return };
