@@ -163,13 +163,39 @@ pub fn template_into_container(
 
 /// Recursively copy `src` into `dst`, skipping anything `dst` already has.
 ///
+/// Symlinks are followed, files by `fs::copy` and directories by descending
+/// into them, because a config commonly keeps its skills in a symlinked
+/// directory. A link that points back up the tree is skipped rather than
+/// followed forever.
+///
 /// The skip makes the "never overwrite a file that is already there" guarantee
 /// unconditional: production only ever calls this on a directory it just
 /// created, but the copy itself must not depend on that.
 fn seed_config_dir(src: &Path, dst: &Path) -> Result<()> {
+    seed_dir(src, dst, &mut Vec::new())
+}
+
+/// Recursive half of [`seed_config_dir`].
+///
+/// `ancestors` holds the canonical path of every directory on the current
+/// descent. Both `read_dir` and `metadata` follow symlinks, so a config that
+/// links back to one of its ancestors would otherwise be copied until the
+/// process runs out of handles. Two links to the same directory elsewhere in
+/// the tree are still both copied: they are not on the same descent, and the
+/// host's layout put them there.
+fn seed_dir(src: &Path, dst: &Path, ancestors: &mut Vec<PathBuf>) -> Result<()> {
+    let canonical = src
+        .canonicalize()
+        .map_err(|e| anyhow::Error::new(e).context(format!("Failed to read {}", src.display())))?;
+    if ancestors.contains(&canonical) {
+        return Ok(());
+    }
+
     std::fs::create_dir_all(dst).map_err(|e| {
         anyhow::Error::new(e).context(format!("Failed to create {}", dst.display()))
     })?;
+
+    ancestors.push(canonical);
 
     let entries = std::fs::read_dir(src)
         .map_err(|e| anyhow::Error::new(e).context(format!("Failed to read {}", src.display())))?;
@@ -179,23 +205,29 @@ fn seed_config_dir(src: &Path, dst: &Path) -> Result<()> {
             anyhow::Error::new(e).context(format!("Failed to read {}", src.display()))
         })?;
         let target = dst.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|e| {
-            anyhow::Error::new(e).context(format!("Failed to stat {}", entry.path().display()))
+        let path = entry.path();
+        // `metadata`, not `file_type`: a config may keep its skills (or any
+        // other directory) in a symlinked directory, and `file_type` describes
+        // the link itself, which is neither a directory nor something
+        // `fs::copy` can copy as one.
+        let metadata = std::fs::metadata(&path).map_err(|e| {
+            anyhow::Error::new(e).context(format!("Failed to stat {}", path.display()))
         })?;
 
-        if file_type.is_dir() {
-            seed_config_dir(&entry.path(), &target)?;
+        if metadata.is_dir() {
+            seed_dir(&path, &target, ancestors)?;
         } else if !target.exists() {
-            std::fs::copy(entry.path(), &target).map_err(|e| {
+            std::fs::copy(&path, &target).map_err(|e| {
                 anyhow::Error::new(e).context(format!(
                     "Failed to copy {} to {}",
-                    entry.path().display(),
+                    path.display(),
                     target.display()
                 ))
             })?;
         }
     }
 
+    ancestors.pop();
     Ok(())
 }
 
@@ -634,6 +666,54 @@ mod tests {
         seed_config_dir(&src, &dst).expect("seed");
 
         assert!(dst.join("opencode.json").is_file());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A config that keeps its skills in a dotfiles checkout commonly links the
+    /// directory rather than copying it. Seeding has to follow the link: the
+    /// link itself is neither a directory nor a file `fs::copy` can write.
+    #[cfg(unix)]
+    #[test]
+    fn seed_follows_a_symlinked_directory() {
+        let root = scratch("seed-symlink");
+        let src = root.join("src");
+        let shared = root.join("dotfiles/skills");
+        std::fs::create_dir_all(&shared).expect("shared");
+        std::fs::write(shared.join("readme.md"), "from-host").expect("write");
+        std::fs::create_dir_all(&src).expect("src");
+        std::os::unix::fs::symlink(&shared, src.join("skills")).expect("symlink");
+
+        let dst = root.join("dst");
+        seed_config_dir(&src, &dst).expect("seed");
+
+        assert_eq!(
+            std::fs::read_to_string(dst.join("skills/readme.md")).expect("seeded"),
+            "from-host"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Following symlinked directories must not mean following one back into
+    /// its own ancestor, which would recurse without end.
+    #[cfg(unix)]
+    #[test]
+    fn seed_does_not_follow_a_symlink_back_up_the_tree() {
+        let root = scratch("seed-cycle");
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("src");
+        std::fs::write(src.join("opencode.json"), "x").expect("write");
+        std::os::unix::fs::symlink(&src, src.join("loop")).expect("symlink");
+
+        let dst = root.join("dst");
+        seed_config_dir(&src, &dst).expect("seed");
+
+        assert!(dst.join("opencode.json").is_file());
+        assert!(
+            !dst.join("loop").exists(),
+            "the cycle was copied instead of skipped"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
