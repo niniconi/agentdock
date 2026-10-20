@@ -45,9 +45,9 @@ impl Sandbox {
         Some(Self::new(label, Mode::Real))
     }
 
-    /// A sandbox for paths that shell out to the docker CLI without needing a
-    /// daemon (an `inspect` of a name that cannot resolve, say). `None` when
-    /// the binary is not installed, so the caller skips there too.
+    /// A sandbox for paths that need the docker CLI but not a working daemon —
+    /// a run told to talk to a socket that does not exist, say. `None` when the
+    /// binary is not installed, so the caller skips there too.
     pub fn cli(label: &str) -> Option<Self> {
         if !docker_cli_available() {
             return None;
@@ -177,6 +177,19 @@ impl Sandbox {
             .env("HOME", "relative-home")
             .env_remove("XDG_DATA_HOME")
             .env("PATH", self.path())
+            .args(args)
+            .output()
+            .expect("run agentdock")
+    }
+
+    /// Run with `DOCKER_HOST` pointing at a socket that does not exist, so the
+    /// docker CLI is present but no daemon can answer it. A command that reads
+    /// any failed docker call as "no container" fails here instead.
+    pub fn run_with_an_unreachable_daemon(&mut self, args: &[&str]) -> Output {
+        let socket = self.root.join("no-such-docker.sock");
+        self.command()
+            .env("PATH", self.path())
+            .env("DOCKER_HOST", format!("unix://{}", socket.display()))
             .args(args)
             .output()
             .expect("run agentdock")

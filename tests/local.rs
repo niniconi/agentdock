@@ -1,9 +1,10 @@
 //! Tests that exercise agentdock's local logic: records parsing, argument
-//! validation, path safety and migrations. They never need docker — the
-//! sandbox's PATH has no docker on it, so a run that unexpectedly reaches
-//! docker fails loudly instead of being quietly stubbed — and assertions are
-//! on stderr, exit codes and the records file. Anything that needs a real
-//! container lives in tests/docker_real.rs.
+//! validation, path safety and migrations. None needs a working daemon: the
+//! sandbox's PATH either holds no docker at all, so a run that unexpectedly
+//! reaches docker fails instead of being quietly stubbed, or points the docker
+//! CLI at a socket that cannot answer. Assertions are on stderr, exit codes and
+//! the records file. Anything that needs a real container lives in
+//! tests/docker_real.rs.
 
 mod common;
 
@@ -66,42 +67,44 @@ fn a_malformed_records_file_still_explains_why() {
 }
 
 #[test]
-fn a_container_name_cannot_escape_the_data_directory() {
-    // `--purge` is a recursive delete, and `records.json` is a plain user-owned
-    // file a script or a merge could have edited. `PathBuf::join` resolves `..`
-    // and lets an absolute component replace the base, so without a check these
-    // would delete a directory agentdock never created — here, the data of
-    // every other container. `delete` checks the container's existence before
-    // it reaches the name, and that check shells out to docker, so this test
-    // needs the docker binary — but only as a CLI: no daemon is involved.
-    let Some(mut sb) = Sandbox::cli("unsafe-name") else {
+fn a_daemon_that_cannot_be_reached_is_not_a_missing_container() {
+    // `delete --force` acts on "not found" by dropping the record, so with a
+    // docker whose daemon cannot answer it must fail instead of reporting a
+    // container that was removed without agentdock's knowledge.
+    let Some(mut sb) = Sandbox::cli("no-daemon") else {
         return;
     };
-    let victim = sb.root.join("outside");
-    std::fs::create_dir_all(&victim).expect("victim");
-    std::fs::write(victim.join("notes.txt"), "not agentdock's").expect("seed");
+    sb.write_records(&format!(
+        r#"{{"records":{{"box":{{"path":"{mnt}","created_at":"2026-01-01T00:00:00+00:00","docker_image":"img","agent_name":"opencode","kvm":false}}}}}}"#,
+        mnt = sb.mount().display()
+    ));
 
-    for name in ["..", "../outside", &victim.display().to_string()] {
-        let body = format!(
-            r#"{{"records":{{"{name}":{{"path":"{mnt}","created_at":"2026-01-01T00:00:00+00:00","docker_image":"img","agent_name":"opencode","kvm":false}}}}}}"#,
-            name = name,
-            mnt = sb.mount().display()
-        );
-        sb.write_records(&body);
+    let out = sb.run_with_an_unreachable_daemon(&["delete", "box", "--force"]);
 
-        let out = sb.run(&["delete", name, "--force", "--purge"]);
-
-        assert!(
-            stderr(&out).contains("cannot be used as a container name"),
-            "{name} should be refused, got: {out:?}"
-        );
-        assert!(
-            !stdout(&out).contains("Purged"),
-            "{name} must not report a purge it did not do"
-        );
-    }
-
-    assert!(victim.join("notes.txt").exists(), "the victim was deleted");
+    assert!(
+        !out.status.success(),
+        "delete succeeded with no daemon: {}",
+        stdout(&out)
+    );
+    // Docker's wording differs by version ("Cannot connect to the Docker
+    // daemon" and "failed to connect to the docker API" are both in the wild),
+    // but every version names the socket it could not reach.
+    let stderr = stderr(&out);
+    assert!(
+        stderr.contains("no-such-docker.sock"),
+        "the docker failure must be reported: {}",
+        stderr
+    );
+    assert!(
+        !stdout(&out).contains("not found"),
+        "a failed docker call read as a missing container: {}",
+        stdout(&out)
+    );
+    assert!(
+        sb.records().contains("\"box\""),
+        "the record was removed anyway: {}",
+        sb.records()
+    );
 }
 
 #[test]

@@ -121,18 +121,47 @@ impl DockerClient {
     pub fn inspect(name: &str) -> Result<ContainerStatus> {
         let output = docker(&["inspect", "-f", "{{.State.Running}}", name])?;
 
-        if !output.status.success() {
-            return Ok(ContainerStatus::NotFound);
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Ok(match stdout.trim() {
+                "true" => ContainerStatus::Running,
+                "false" => ContainerStatus::Stopped,
+                _ => ContainerStatus::NotFound,
+            });
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let status_str = stdout.trim();
-
-        match status_str {
-            "true" => Ok(ContainerStatus::Running),
-            "false" => Ok(ContainerStatus::Stopped),
-            _ => Ok(ContainerStatus::NotFound),
+        // `docker inspect` exits nonzero both for a container that does not
+        // exist and for a daemon it cannot reach, and the two must not read the
+        // same: callers treat NotFound as "the record outlived the container",
+        // and `delete --force` acts on it by dropping the record. Listing every
+        // container tells them apart, because the listing only succeeds if the
+        // daemon answered. It runs only after a failed inspect, so the ordinary
+        // path pays nothing for it.
+        let listing = docker(&["ps", "-a", "--format", "{{.Names}} {{.State}}"])?;
+        if !listing.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!(ContainerError::Command {
+                op: "inspect container",
+                stderr: stderr.trim().to_string(),
+            });
         }
+
+        // The name is compared here rather than through `--filter name=`, whose
+        // matches are substring and regular-expression based; a record name is a
+        // plain user-owned string. Docker names contain no spaces, so the first
+        // one separates the fields.
+        let stdout = String::from_utf8_lossy(&listing.stdout);
+        for line in stdout.lines() {
+            let (listed, state) = line.split_once(' ').unwrap_or((line, ""));
+            if listed == name {
+                return Ok(match state {
+                    "running" => ContainerStatus::Running,
+                    _ => ContainerStatus::Stopped,
+                });
+            }
+        }
+
+        Ok(ContainerStatus::NotFound)
     }
 
     pub fn restart(name: &str) -> Result<()> {

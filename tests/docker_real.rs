@@ -1024,6 +1024,42 @@ fn delete_skips_a_container_that_is_already_gone() {
     assert!(!s.records().contains("real-deletegone"), "{}", s.records());
 }
 
+/// `--purge` is a recursive delete whose name comes from a plain user-owned
+/// records file, so a name that is not one path segment must be refused before
+/// any tree is touched. `delete` checks the container first, and that check
+/// needs the daemon to tell "missing" from "unreachable".
+#[test]
+fn a_container_name_cannot_escape_the_data_directory() {
+    let Some(mut s) = sb("unsafe-name") else {
+        return;
+    };
+    let victim = s.root.join("outside");
+    std::fs::create_dir_all(&victim).expect("victim");
+    std::fs::write(victim.join("notes.txt"), "not agentdock's").expect("seed");
+
+    for name in ["..", "../outside", &victim.display().to_string()] {
+        let body = format!(
+            r#"{{"records":{{"{name}":{{"path":"{mnt}","created_at":"2026-01-01T00:00:00+00:00","docker_image":"img","agent_name":"opencode","kvm":false}}}}}}"#,
+            name = name,
+            mnt = s.mount().display()
+        );
+        s.write_records(&body);
+
+        let out = s.run(&["delete", name, "--force", "--purge"]);
+
+        assert!(
+            stderr(&out).contains("cannot be used as a container name"),
+            "{name} should be refused, got: {out:?}"
+        );
+        assert!(
+            !stdout(&out).contains("Purged"),
+            "{name} must not report a purge it did not do"
+        );
+    }
+
+    assert!(victim.join("notes.txt").exists(), "the victim was deleted");
+}
+
 #[test]
 fn a_missing_image_reports_the_pull_failure() {
     let Some(mut s) = sb("persist-nopull") else {
