@@ -89,6 +89,17 @@ pub fn execute_update(args: UpdateArgs) -> Result<()> {
         );
         if !args.dry_run {
             container::ensure_running(&name, &config)?;
+            // `--image` may name another reference to the same image. The
+            // container does not move, but the record has to adopt the new
+            // reference: a later bare `update` follows this record, and would
+            // otherwise fall back to the tag the user just moved away from.
+            if record.docker_image != config.docker_image {
+                let mut updated = record.clone();
+                updated.docker_image = config.docker_image.clone();
+                state.insert(name.clone(), updated);
+                state.save()?;
+                println!("Recorded image: {}", config.docker_image);
+            }
         }
         return Ok(());
     }

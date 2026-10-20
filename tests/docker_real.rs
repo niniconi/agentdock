@@ -2040,6 +2040,101 @@ fn update_moves_onto_a_named_image_and_keeps_its_configuration() {
     }
 }
 
+/// `update --image` naming a tag for the image the container already runs is a
+/// no-op for the container, but the record still has to adopt the reference:
+/// otherwise the next bare `update` follows the old tag again.
+#[test]
+fn update_records_a_named_tag_that_points_at_the_same_image() {
+    let Some(mut s) = sb("update-same-image") else {
+        return;
+    };
+    s.track("real-updatesame");
+
+    let ctx = s.root.join("ctx");
+    std::fs::create_dir_all(&ctx).expect("ctx");
+    std::fs::write(ctx.join("Dockerfile"), "FROM alpine:3.20\n").expect("dockerfile");
+    let out = std::process::Command::new("docker")
+        .args(["build", "-t", "agentdock-same-a:1", ctx.to_str().unwrap()])
+        .output()
+        .expect("docker build");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    docker(&["tag", "agentdock-same-a:1", "agentdock-same-b:1"]);
+
+    let out = s.run(&[
+        "apply",
+        "-a",
+        "agentdock-same-a:1/sh",
+        "-n",
+        "real-updatesame",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let first = real_container_id("real-updatesame");
+    let id = docker(&["image", "inspect", "-f", "{{.Id}}", "agentdock-same-a:1"]);
+
+    // A dry run reports the no-op without rewriting the record.
+    let out = s.run(&[
+        "update",
+        "-n",
+        "real-updatesame",
+        "--image",
+        "agentdock-same-b:1",
+        "--no-pull",
+        "--dry-run",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    assert_eq!(
+        records["records"]["real-updatesame"]["docker_image"],
+        serde_json::json!("agentdock-same-a:1"),
+        "a dry run rewrote the record"
+    );
+
+    let out = s.run(&[
+        "update",
+        "-n",
+        "real-updatesame",
+        "--image",
+        "agentdock-same-b:1",
+        "--no-pull",
+    ]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        real_container_id("real-updatesame"),
+        first,
+        "a tag for the same image must not recreate the container"
+    );
+
+    let records: serde_json::Value = serde_json::from_str(&s.records()).expect("parse");
+    assert_eq!(
+        records["records"]["real-updatesame"]["docker_image"],
+        serde_json::json!("agentdock-same-b:1"),
+        "the record kept the old reference"
+    );
+    assert_eq!(
+        records["records"]["real-updatesame"]["image_id"],
+        serde_json::json!(id),
+        "the recorded image id changed without a rebuild"
+    );
+
+    let out = s.run(&["update", "-n", "real-updatesame", "--no-pull"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("agentdock-same-b:1"),
+        "a later update fell back to the old tag: {}",
+        stdout(&out)
+    );
+
+    for tag in ["agentdock-same-a:1", "agentdock-same-b:1"] {
+        let _ = std::process::Command::new("docker")
+            .args(["rmi", "-f", tag])
+            .output();
+    }
+}
+
 /// `update` on a record whose container was removed outside agentdock fails the
 /// same way `up` does, before the rebuild path can surface the `docker rm` error.
 /// The recorded id is dropped so the rebuild branch is the one that would
