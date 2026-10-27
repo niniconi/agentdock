@@ -409,6 +409,7 @@ mod tests {
     struct EnvGuard {
         home: Option<std::ffi::OsString>,
         xdg: Option<std::ffi::OsString>,
+        data: Option<std::ffi::OsString>,
         pi: Option<std::ffi::OsString>,
     }
 
@@ -417,6 +418,7 @@ mod tests {
             Self {
                 home: std::env::var_os("HOME"),
                 xdg: std::env::var_os("XDG_CONFIG_HOME"),
+                data: std::env::var_os("XDG_DATA_HOME"),
                 pi: std::env::var_os("PI_CODING_AGENT_DIR"),
             }
         }
@@ -434,6 +436,10 @@ mod tests {
                 match &self.xdg {
                     Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
                     None => std::env::remove_var("XDG_CONFIG_HOME"),
+                }
+                match &self.data {
+                    Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                    None => std::env::remove_var("XDG_DATA_HOME"),
                 }
                 match &self.pi {
                     Some(v) => std::env::set_var("PI_CODING_AGENT_DIR", v),
@@ -456,6 +462,7 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", home);
             std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("XDG_DATA_HOME");
             std::env::remove_var("PI_CODING_AGENT_DIR");
         }
     }
@@ -613,6 +620,56 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn container_data_dir_accepts_only_one_plain_segment() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _env = EnvGuard::capture();
+        let root = scratch("data-dir");
+        set_host_env(&root.join("home"));
+        // SAFETY: guarded from concurrent mutation by ENV_LOCK, restored by
+        // EnvGuard on return.
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", root.join("data"));
+        }
+
+        assert_eq!(
+            container_data_dir("box").expect("plain name"),
+            root.join("data/agentdock/box")
+        );
+
+        for bad in ["", ".", "..", "a/b", "../evil", "/somewhere/else"] {
+            assert!(
+                container_data_dir(bad).is_err(),
+                "{bad} must not name a directory outside the container base"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn container_data_dirs_lists_one_entry_per_agent_and_kind() {
+        assert_eq!(
+            container_data_dirs("box", &[Persist::Config]),
+            vec![
+                "box/opencode/config".to_string(),
+                "box/pi-agent/config".to_string()
+            ]
+        );
+        assert_eq!(
+            container_data_dirs("box", &[Persist::Data]),
+            vec!["box/opencode/data".to_string()]
+        );
+        assert_eq!(
+            container_data_dirs("box", &[Persist::Config, Persist::Data]),
+            vec![
+                "box/opencode/config".to_string(),
+                "box/opencode/data".to_string(),
+                "box/pi-agent/config".to_string()
+            ]
+        );
     }
 
     fn scratch(label: &str) -> PathBuf {

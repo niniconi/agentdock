@@ -573,6 +573,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn read_marker_refuses_a_newer_version_without_touching_it() {
+        let root = std::env::temp_dir().join(format!(
+            "agentdock-marker-newer-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch");
+
+        let marker = root.join(MARKER_FILE);
+        let original = r#"{"version":99,"repo":"proj","main":"proj-main"}"#;
+        std::fs::write(&marker, original).expect("write marker");
+
+        let err = read_marker(&root).expect_err("a newer marker must be refused");
+        assert!(
+            err.to_string().contains("Upgrade agentdock"),
+            "the error must point at the newer binary: {err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&marker).expect("read marker"),
+            original,
+            "the newer marker was rewritten"
+        );
+        assert!(
+            !root.join(".agentdock.json.bak.v0").exists(),
+            "a newer marker must not be backed up as an old one"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn test_flatten_slashes() {
         assert_eq!(flatten("main"), "main");
         assert_eq!(flatten("feat/login"), "feat-login");

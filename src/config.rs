@@ -406,4 +406,104 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn port_mapping_requires_two_valid_numbers() {
+        assert!(validate_port_mapping("8080:80").is_ok());
+        assert!(validate_port_mapping("1:65535").is_ok());
+
+        for bad in [
+            "",
+            "8080",
+            "8080:",
+            ":80",
+            "80:http",
+            "70000:80",
+            "8080:80:90",
+        ] {
+            assert!(
+                validate_port_mapping(bad).is_err(),
+                "{bad} should have been rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn persist_names_are_deduped_and_unknown_ones_ignored() {
+        let names: Vec<String> = ["data", "config", "data", "bogus", "config"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        assert_eq!(
+            parse_persist(&names),
+            vec![Persist::Data, Persist::Config],
+            "the first mention wins and duplicates do not accumulate"
+        );
+    }
+
+    #[test]
+    fn a_config_round_trips_through_a_record() {
+        let config = Config {
+            docker_image: "img".to_string(),
+            agent_name: "opencode".to_string(),
+            ports: vec!["8080:80".to_string()],
+            http_proxy: Some("http://p:3128".to_string()),
+            https_proxy: Some("https://p:3128".to_string()),
+            init_content: Some("echo hi".to_string()),
+            kvm: true,
+            persist: Some(vec![Persist::Config, Persist::Data]),
+            template: false,
+            envs: vec!["FOO=bar".to_string()],
+            memory: Some("1g".to_string()),
+            cpus: Some("2".to_string()),
+        };
+
+        let record = config.to_record(std::path::PathBuf::from("/tmp/box"), "now".into());
+        assert_eq!(
+            record.persist,
+            Some(vec!["config".to_string(), "data".to_string()])
+        );
+
+        let back = Config::of(&record);
+        assert_eq!(back.docker_image, config.docker_image);
+        assert_eq!(back.agent_name, config.agent_name);
+        assert_eq!(back.ports, config.ports);
+        assert_eq!(back.http_proxy, config.http_proxy);
+        assert_eq!(back.https_proxy, config.https_proxy);
+        assert_eq!(back.init_content, config.init_content);
+        assert!(back.kvm);
+        assert_eq!(back.persist, config.persist);
+        assert_eq!(back.envs, config.envs);
+        assert_eq!(back.memory, config.memory);
+        assert_eq!(back.cpus, config.cpus);
+    }
+
+    #[test]
+    fn empty_ports_and_envs_are_omitted_from_a_record() {
+        let config = Config {
+            docker_image: "img".to_string(),
+            agent_name: "opencode".to_string(),
+            ports: Vec::new(),
+            http_proxy: None,
+            https_proxy: None,
+            init_content: None,
+            kvm: false,
+            persist: None,
+            template: false,
+            envs: Vec::new(),
+            memory: None,
+            cpus: None,
+        };
+
+        let record = config.to_record(std::path::PathBuf::from("/tmp/box"), "now".into());
+        assert!(record.ports.is_none());
+        assert!(record.envs.is_none());
+        assert!(record.persist.is_none());
+
+        let back = Config::of(&record);
+        assert!(back.ports.is_empty());
+        assert!(back.envs.is_empty());
+        assert!(back.persist.is_none());
+    }
 }

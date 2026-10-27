@@ -338,6 +338,70 @@ fn startup_migrates_an_unstamped_records_file() {
 }
 
 #[test]
+fn startup_refuses_a_newer_layout_version() {
+    let mut sb = sandbox("mig-layout-newer");
+    sb.write_records(r#"{"version":1,"records":{}}"#);
+    let data = sb.root.join("home/.local/share/agentdock");
+    std::fs::create_dir_all(&data).expect("data home");
+    std::fs::write(data.join("version"), "99\n").expect("version");
+
+    let out = sb.run(&["list"]);
+
+    assert!(!out.status.success(), "a newer layout was accepted");
+    assert!(
+        stderr(&out).contains("Upgrade agentdock"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        std::fs::read_to_string(data.join("version")).unwrap(),
+        "99\n",
+        "the newer version file was rewritten"
+    );
+}
+
+#[test]
+fn a_malformed_layout_version_is_reported() {
+    let mut sb = sandbox("mig-layout-bad");
+    sb.write_records(r#"{"version":1,"records":{}}"#);
+    let data = sb.root.join("home/.local/share/agentdock");
+    std::fs::create_dir_all(&data).expect("data home");
+    std::fs::write(data.join("version"), "not-a-number\n").expect("version");
+
+    let out = sb.run(&["list"]);
+    let err = stderr(&out);
+
+    assert!(!out.status.success(), "a malformed version was accepted");
+    assert!(err.contains("migrating data home layout"), "{err}");
+    assert!(
+        err.contains("Failed to parse") && err.contains("as a version"),
+        "the parse failure must name the file: {err}"
+    );
+}
+
+#[test]
+fn the_layout_version_file_is_backed_up_before_stamping() {
+    let mut sb = sandbox("mig-layout-backup");
+    sb.write_records(r#"{"version":1,"records":{}}"#);
+    let data = sb.root.join("home/.local/share/agentdock");
+    std::fs::create_dir_all(&data).expect("data home");
+    std::fs::write(data.join("version"), "0\n").expect("version");
+
+    let out = sb.run(&["list"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    assert_eq!(
+        std::fs::read_to_string(data.join("version")).unwrap(),
+        "1\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(data.join("version.bak.v0")).unwrap(),
+        "0\n",
+        "the previous version file was not backed up"
+    );
+}
+
+#[test]
 fn startup_refuses_a_newer_records_version() {
     let mut sb = sandbox("mig-newer");
     sb.write_records(r#"{"version":99,"records":{}}"#);
