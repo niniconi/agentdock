@@ -189,6 +189,233 @@ fn init_preserves_uncommitted_work() {
 }
 
 #[test]
+fn worktree_list_json_emits_rows_as_json() {
+    let Some(sb) = Sandbox::new("listjson") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
+
+    let main = sb.path("proj/proj-main");
+    assert!(
+        agentdock(&main, &sb.home(), &["worktree", "add", "dev"])
+            .status
+            .success()
+    );
+
+    let out = agentdock(&main, &sb.home(), &["worktree", "list", "--format", "json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let rows: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json rows");
+    let rows = rows.as_array().expect("an array of rows");
+
+    let main_row = rows
+        .iter()
+        .find(|row| row[0] == "main")
+        .unwrap_or_else(|| panic!("no main row in {rows:?}"));
+    assert_eq!(main_row[1], "main");
+    assert_eq!(
+        std::fs::canonicalize(main_row[2].as_str().unwrap()).expect("main path"),
+        std::fs::canonicalize(&main).expect("main path")
+    );
+    assert_eq!(main_row[3].as_str().unwrap().len(), 7, "{main_row:?}");
+    assert_eq!(main_row[4], "-", "a worktree without a container shows '-'");
+
+    let dev_row = rows
+        .iter()
+        .find(|row| row[1] == "dev")
+        .unwrap_or_else(|| panic!("no dev row in {rows:?}"));
+    assert_eq!(dev_row[0], "worktree");
+    assert!(dev_row[2].as_str().unwrap().ends_with("proj-dev"));
+    assert_eq!(dev_row[4], "-");
+}
+
+#[test]
+fn commands_resolve_the_project_from_a_nested_directory() {
+    let Some(sb) = Sandbox::new("nestedcwd") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
+
+    let main = sb.path("proj/proj-main");
+    assert!(
+        agentdock(&main, &sb.home(), &["worktree", "add", "dev"])
+            .status
+            .success()
+    );
+
+    // Running from a nested directory inside one worktree must still find the
+    // project marker in the container above it.
+    let nested = sb.path("proj/proj-main/src");
+    let listed = agentdock(&nested, &sb.home(), &["worktree", "list"]);
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    assert!(stdout(&listed).contains("proj-dev"), "{}", stdout(&listed));
+
+    let added = agentdock(&nested, &sb.home(), &["worktree", "add", "feat"]);
+    assert!(added.status.success(), "{}", stderr(&added));
+    assert!(sb.path("proj/proj-feat").join("src/lib.rs").exists());
+
+    let removed = agentdock(&nested, &sb.home(), &["worktree", "rm", "feat"]);
+    assert!(removed.status.success(), "{}", stderr(&removed));
+    assert!(!sb.path("proj/proj-feat").exists());
+}
+
+#[test]
+fn add_checks_out_an_existing_branch() {
+    let Some(sb) = Sandbox::new("existingbranch") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    assert!(
+        agentdock(&repo, &sb.home(), &["worktree", "init"])
+            .status
+            .success()
+    );
+
+    let main = sb.path("proj/proj-main");
+    git(&main, &["branch", "existing"]);
+
+    // The branch already exists, so `worktree add` must check it out instead of
+    // trying to create it with -b.
+    let out = agentdock(&main, &sb.home(), &["worktree", "add", "existing"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let dir = sb.path("proj/proj-existing");
+    assert!(dir.join("src/lib.rs").exists(), "worktree was not created");
+    assert_eq!(
+        git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "existing"
+    );
+}
+
+#[test]
+fn init_relocates_an_existing_branch_worktree() {
+    let Some(sb) = Sandbox::new("relocatebranch") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    git(&repo, &["worktree", "add", "-q", "-b", "dev", "../dev"]);
+
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    assert!(out.status.success(), "init failed: {}", stderr(&out));
+
+    let main = sb.path("proj/proj-main");
+    let dev = sb.path("proj/proj-dev");
+    assert!(dev.join("src/lib.rs").exists(), "branch worktree not moved");
+    assert_eq!(git(&dev, &["rev-parse", "--abbrev-ref", "HEAD"]), "dev");
+    // The .git pointer still named the old location until `worktree repair`.
+    assert_eq!(git(&dev, &["status", "--porcelain"]), "");
+    assert!(
+        git(&main, &["worktree", "list", "--porcelain"]).contains(&dev.display().to_string()),
+        "git does not know the relocated worktree"
+    );
+}
+
+#[test]
+fn init_rewrites_push_urls_too() {
+    let Some(sb) = Sandbox::new("pushremote") else {
+        return;
+    };
+    git(&sb.root, &["init", "-q", "--bare", "origin.git"]);
+    git(&sb.root, &["init", "-q", "--bare", "push.git"]);
+
+    let repo = make_repo(&sb, "proj", "main");
+    git(&repo, &["remote", "add", "origin", "../origin.git"]);
+    git(
+        &repo,
+        &["remote", "set-url", "--push", "origin", "../push.git"],
+    );
+
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    assert!(out.status.success(), "init failed: {}", stderr(&out));
+
+    let main = sb.path("proj/proj-main");
+    for args in [
+        &["remote", "get-url", "origin"][..],
+        &["remote", "get-url", "--push", "origin"][..],
+    ] {
+        let url = git(&main, args);
+        assert!(url.starts_with('/'), "url is not absolute: {url}");
+    }
+    // A relative push url would resolve against the new location and break.
+    git(&main, &["push", "-q", "origin", "main"]);
+}
+
+#[test]
+fn init_refuses_when_the_main_worktree_directory_is_taken() {
+    let Some(sb) = Sandbox::new("targettaken") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    std::fs::create_dir_all(repo.join("proj-main")).expect("blocking dir");
+
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+
+    assert!(!out.status.success(), "init accepted a taken target");
+    assert!(stderr(&out).contains("already exists"), "{}", stderr(&out));
+    assert!(repo.join("src/lib.rs").exists(), "project was moved anyway");
+}
+
+#[test]
+fn init_refuses_a_repository_inside_an_existing_project() {
+    let Some(sb) = Sandbox::new("nestedproject") else {
+        return;
+    };
+    let parent = sb.path("parent");
+    std::fs::create_dir_all(&parent).expect("parent");
+    std::fs::write(
+        parent.join(".agentdock.json"),
+        r#"{"version":1,"repo":"parent","main":"parent-main"}"#,
+    )
+    .expect("marker");
+
+    let repo = make_repo(&sb, "parent/child", "main");
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+
+    assert!(!out.status.success(), "nested project was converted");
+    assert!(
+        stderr(&out).contains("existing worktree project"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(repo.join("src/lib.rs").exists(), "project was moved anyway");
+}
+
+#[test]
+fn init_ignores_a_record_whose_path_no_longer_exists() {
+    let Some(sb) = Sandbox::new("stalerecord") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+
+    let records = sb.home().join(".config/agentdock");
+    std::fs::create_dir_all(&records).expect("create records dir");
+    std::fs::write(
+        records.join("records.json"),
+        format!(
+            r#"{{"records":{{"gone":{{"path":"{}","created_at":"2026-01-01T00:00:00Z","docker_image":"img","agent_name":"agent","kvm":false}}}}}}"#,
+            sb.path("proj/deleted-subdir").display()
+        ),
+    )
+    .expect("write records");
+
+    // find_within canonicalizes each record path; one whose directory is gone
+    // cannot still be mounted inside the project, so it must not block init.
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(sb.path("proj/proj-main/src/lib.rs").exists());
+}
+
+#[test]
 fn init_rewrites_relative_remote_urls() {
     let Some(sb) = Sandbox::new("remote") else {
         return;
@@ -539,7 +766,11 @@ fn worktree_commands_report_a_non_converted_project_clearly() {
     };
     let repo = make_repo(&sb, "plain", "main");
 
-    for args in [vec!["worktree", "list"], vec!["worktree", "rm", "whatever"]] {
+    for args in [
+        vec!["worktree", "list"],
+        vec!["worktree", "add", "dev"],
+        vec!["worktree", "rm", "whatever"],
+    ] {
         let out = agentdock(&repo, &sb.home(), &args);
         assert!(!out.status.success(), "{:?} unexpectedly succeeded", args);
         let err = stderr(&out);
