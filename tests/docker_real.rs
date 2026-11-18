@@ -111,6 +111,25 @@ fn remove_image(tag: &str) {
         .output();
 }
 
+/// Run git, panicking on failure, and return its trimmed stdout.
+fn git(cwd: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .output()
+        .expect("run git");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 #[test]
 fn apply_configures_a_real_container() {
     let Some(mut s) = sb("apply") else { return };
@@ -2571,5 +2590,62 @@ fn update_locates_the_container_by_path() {
         stdout(&out).contains("already runs image"),
         "update did not find the container by path: {}",
         stdout(&out)
+    );
+}
+
+/// A shared container mounts the whole worktree container at `/workspace`, so
+/// every linked worktree is visible. The `.git` files are relative, which is
+/// what makes the gitdirs resolve inside the container rather than at their
+/// old host paths.
+#[test]
+fn a_shared_container_resolves_relative_worktree_gitdirs() {
+    let Some(mut s) = sb("shared-worktree") else {
+        return;
+    };
+    s.track("real-sharedwt");
+
+    let root = s.mount();
+    std::fs::write(root.join("README.md"), "shared\n").expect("write readme");
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-qm", "init"]);
+
+    let out = s.run(&["worktree", "init"]);
+    assert!(out.status.success(), "init failed: {}", stderr(&out));
+
+    let out = s.run(&["worktree", "add", "dev"]);
+    assert!(out.status.success(), "add failed: {}", stderr(&out));
+
+    let out = s.run(&["apply", "-a", "alpine:3.20/sh", "-n", "real-sharedwt"]);
+    assert!(out.status.success(), "apply failed: {}", stderr(&out));
+
+    let source = docker(&[
+        "inspect",
+        "-f",
+        "{{range .Mounts}}{{if eq .Destination \"/workspace\"}}{{.Source}}{{end}}{{end}}",
+        "real-sharedwt",
+    ]);
+    assert_eq!(
+        std::fs::canonicalize(source).expect("canonical mount source"),
+        std::fs::canonicalize(&root).expect("canonical sandbox root"),
+        "the shared container is not mounted on the container root"
+    );
+
+    // The main worktree's .git is a directory; the linked one is a pointer
+    // whose relative target has to exist inside the shared mount.
+    let script = r#"
+        test -d /workspace/mnt-main/.git &&
+        cd /workspace/mnt-dev &&
+        p=$(sed -n 's/^gitdir: //p' .git) &&
+        test -d "$p"
+    "#;
+    let out = std::process::Command::new("docker")
+        .args(["exec", "real-sharedwt", "sh", "-c", script])
+        .output()
+        .expect("docker exec");
+    assert!(
+        out.status.success(),
+        "the relative gitdir did not resolve in the shared container: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
