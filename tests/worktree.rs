@@ -199,6 +199,7 @@ fn init_preserves_uncommitted_work() {
     let repo = make_repo(&sb, "proj", "main");
     std::fs::write(repo.join("src/lib.rs"), "code\nmore\n").expect("modify");
     std::fs::write(repo.join("STAGED.md"), "staged\n").expect("new file");
+    std::fs::write(repo.join("UNTRACKED.md"), "untracked\n").expect("untracked file");
     git(&repo, &["add", "STAGED.md"]);
 
     let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
@@ -212,6 +213,11 @@ fn init_preserves_uncommitted_work() {
         text
     );
     assert!(text.contains("A  STAGED.md"), "lost staged file: {}", text);
+    assert!(
+        text.contains("?? UNTRACKED.md"),
+        "lost untracked file: {}",
+        text
+    );
 }
 
 #[test]
