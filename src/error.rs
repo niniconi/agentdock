@@ -91,6 +91,22 @@ Suggested actions:
     WorktreeInsideRepo { path: PathBuf },
 
     #[error(
+        "Could not move worktree '{worktree}' into '{dest}'.
+
+The conversion was rolled back, so the repository and its worktrees are back
+where they were.
+
+Possible causes:
+  1. The worktree is on a different filesystem
+  2. The destination could not be created
+
+Suggested actions:
+  - Move it onto the same filesystem first: git worktree move {worktree} <path-on-the-same-filesystem>
+  - Then re-run agentdock worktree init"
+    )]
+    WorktreeMoveFailed { worktree: PathBuf, dest: PathBuf },
+
+    #[error(
         "The staging directory '{path}' already exists.
 
 This usually means a previous conversion was interrupted.

@@ -566,6 +566,96 @@ fn init_refuses_when_a_worktree_lives_inside_the_repository() {
     assert!(sb.path("p/inner-wt").exists(), "inner worktree was lost");
 }
 
+#[cfg(unix)]
+#[test]
+fn init_rolls_back_when_a_worktree_cannot_be_moved() {
+    use std::os::unix::fs::MetadataExt;
+
+    let Some(sb) = Sandbox::new("xdev") else {
+        return;
+    };
+    let shm = std::path::Path::new("/dev/shm");
+    let Ok(shm_meta) = std::fs::metadata(shm) else {
+        return;
+    };
+    let Ok(root_meta) = std::fs::metadata(&sb.root) else {
+        return;
+    };
+    if !shm.is_dir() || shm_meta.dev() == root_meta.dev() {
+        return;
+    }
+
+    let repo = make_repo(&sb, "proj", "main");
+    // Deeper than the remote path, so the moves sort puts this one first and a
+    // failed move has something to roll back.
+    let same = sb.path("nested/same");
+    std::fs::create_dir_all(sb.path("nested")).expect("nested parent");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "same",
+            same.to_str().unwrap(),
+        ],
+    );
+
+    let remote = shm.join(format!(
+        "agentdock-xdev-{}",
+        sb.root.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = std::fs::remove_dir_all(&remote);
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "remote",
+            remote.to_str().unwrap(),
+        ],
+    );
+
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    let _ = std::fs::remove_dir_all(&remote);
+    assert!(
+        !out.status.success(),
+        "init accepted a cross-device move: {}",
+        stdout(&out)
+    );
+    let err = stderr(&out);
+    assert!(err.contains("Could not move worktree"), "{err}");
+    assert!(err.contains("rolled back"), "{err}");
+
+    assert!(
+        repo.join(".git").is_dir(),
+        "the repository was not restored"
+    );
+    assert!(repo.join("src/lib.rs").exists());
+    assert!(
+        !sb.path("proj/.agentdock.json").exists(),
+        "a marker was written despite the failure"
+    );
+    assert!(
+        !sb.path("proj/proj-main").exists(),
+        "the main worktree stayed in the container"
+    );
+    assert!(
+        same.join("src/lib.rs").exists(),
+        "the worktree moved before the failure was not restored"
+    );
+    assert!(
+        !sb.path("proj/proj-same").exists(),
+        "a worktree stayed in the container"
+    );
+
+    let listed = git(&repo, &["worktree", "list", "--porcelain"]);
+    assert!(listed.contains(&same.display().to_string()), "{listed}");
+}
+
 #[test]
 fn init_refuses_when_container_records_exist_inside_the_project() {
     let Some(sb) = Sandbox::new("conflict") else {

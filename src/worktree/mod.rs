@@ -296,21 +296,24 @@ pub fn init() -> Result<()> {
     }
 
     // Bring pre-existing worktrees into the container, then repair their `.git`
-    // pointers, which hold absolute paths to their old locations.
-    let mut moved = Vec::new();
+    // pointers, which hold absolute paths to their old locations. A move that
+    // fails has to put back everything moved so far: a half-converted project
+    // is worse than one left alone.
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (source, dest, _) in &moves {
         if let Err(err) = fs::rename(source, dest) {
-            println!(
-                "  warning    : could not move {} into the container ({})",
-                source.display(),
-                err
-            );
-            continue;
+            rollback_worktrees(&moved);
+            rollback_repository(&toplevel, &target, &stage);
+            return Err(err).context(WorktreeError::WorktreeMoveFailed {
+                worktree: source.clone(),
+                dest: dest.clone(),
+            });
         }
-        moved.push(dest.clone());
+        moved.push((dest.clone(), source.clone()));
     }
 
-    if let Err(err) = git::worktree_repair(&target, &moved) {
+    let moved_paths: Vec<PathBuf> = moved.iter().map(|(dest, _)| dest.clone()).collect();
+    if let Err(err) = git::worktree_repair(&target, &moved_paths) {
         println!("  warning    : git worktree repair reported: {}", err);
     }
     let _ = git::worktree_prune(&target);
@@ -340,6 +343,50 @@ pub fn init() -> Result<()> {
 /// A hidden sibling of the repository used as a staging area during the move.
 fn stage_path(toplevel: &Path, repo_name: &str) -> PathBuf {
     toplevel.with_file_name(format!(".{}.agentdock-stage", repo_name))
+}
+
+/// Put worktrees moved before a failed move back at their original paths.
+///
+/// Reverse order matters: a worktree nested inside another one was moved first,
+/// so its parent has to be restored before it can be put back inside.
+fn rollback_worktrees(moved: &[(PathBuf, PathBuf)]) {
+    for (dest, source) in moved.iter().rev() {
+        if let Err(err) = fs::rename(dest, source) {
+            println!(
+                "  warning    : could not restore {} ({})",
+                source.display(),
+                err
+            );
+        }
+    }
+}
+
+/// Put the repository back at its original path after a failed conversion.
+fn rollback_repository(toplevel: &Path, target: &Path, stage: &Path) {
+    if let Err(err) = fs::rename(target, stage) {
+        println!(
+            "  warning    : could not restore {} ({})",
+            toplevel.display(),
+            err
+        );
+        return;
+    }
+    if let Err(err) = fs::remove_dir(toplevel) {
+        println!(
+            "  warning    : could not restore {} ({})",
+            toplevel.display(),
+            err
+        );
+        let _ = fs::rename(stage, target);
+        return;
+    }
+    if let Err(err) = fs::rename(stage, toplevel) {
+        println!(
+            "  warning    : could not restore {} ({})",
+            toplevel.display(),
+            err
+        );
+    }
 }
 
 pub fn add(args: &WorktreeAddArgs) -> Result<()> {
