@@ -8,7 +8,7 @@ several agents can work in parallel.
 
 ## Project status
 
-Pre-release: `0.1.0`. The `v0.1.0` tag exists, but it marks an early milestone rather than
+Pre-release: `0.2.0`. The `v0.1.0` tag exists, but it marks an early milestone rather than
 this tree — it is far behind `master`, and no compatibility promise attaches to it. Breaking
 changes are cheap here, so do not add upgrade shims or migration code for state an earlier
 build wrote **beyond what the `migrate` module owns**: `Record`'s fields follow the same rule

@@ -1,6 +1,6 @@
 [package]
 name = "agentdock"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 repository = "https://github.com/niniconi/agentdock"
 description = "Docker-based AI Agent Manager. Manages persistent Docker containers for running AI agents."
