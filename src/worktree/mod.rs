@@ -253,6 +253,12 @@ pub fn init() -> Result<()> {
         moves.push((entry.path.clone(), dest, label));
     }
 
+    // git permits a worktree to live inside another linked worktree. Moving the
+    // outer one first would drag the inner one along and leave its recorded
+    // source path missing, so move the deepest paths first and lift each one out
+    // to its own sibling.
+    moves.sort_by_key(|a| std::cmp::Reverse(a.0.components().count()));
+
     let stage = stage_path(&toplevel, &repo_name);
     if stage.exists() {
         bail!(WorktreeError::StaleStageDir { path: stage });

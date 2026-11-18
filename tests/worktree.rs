@@ -579,6 +579,37 @@ fn init_refuses_when_a_linked_worktree_has_a_container() {
 }
 
 #[test]
+fn init_relocates_a_worktree_nested_inside_another() {
+    let Some(sb) = Sandbox::new("nestedworktrees") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    git(&repo, &["worktree", "add", "-q", "-b", "outer", "../outer"]);
+    // git allows a worktree inside another worktree; moving the outer one first
+    // would drag this one along and invalidate its recorded source path.
+    git(
+        &repo,
+        &["worktree", "add", "-q", "-b", "inner", "../outer/b"],
+    );
+
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    assert!(out.status.success(), "init failed: {}", stderr(&out));
+
+    let main = sb.path("proj/proj-main");
+    let outer = sb.path("proj/proj-outer");
+    let inner = sb.path("proj/proj-inner");
+    assert!(outer.join("src/lib.rs").exists(), "outer was not moved");
+    assert!(inner.join("src/lib.rs").exists(), "inner was not moved");
+    assert!(!outer.join("b").exists(), "inner was left inside outer");
+    assert_eq!(git(&outer, &["rev-parse", "--abbrev-ref", "HEAD"]), "outer");
+    assert_eq!(git(&inner, &["rev-parse", "--abbrev-ref", "HEAD"]), "inner");
+
+    let listed = git(&main, &["worktree", "list", "--porcelain"]);
+    assert!(listed.contains(&outer.display().to_string()), "{listed}");
+    assert!(listed.contains(&inner.display().to_string()), "{listed}");
+}
+
+#[test]
 fn rm_removes_a_detached_worktree_by_its_short_commit() {
     let Some(sb) = Sandbox::new("rmdetached") else {
         return;
