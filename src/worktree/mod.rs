@@ -161,10 +161,23 @@ pub fn init() -> Result<()> {
         });
     }
 
-    // Refuse when agentdock containers are already mounted inside this project:
-    // their records point at the pre-move paths and would silently go stale.
+    // Refuse when agentdock containers are already mounted anywhere that will
+    // move: inside the repository itself, or inside a linked worktree that init
+    // relocates into the container. Their records point at the pre-move paths
+    // and would silently go stale.
     let state = StateManager::new()?;
-    let conflicts = state.find_within(&toplevel);
+    let mut conflicts = state.find_within(&toplevel);
+    let mut seen: HashSet<String> = conflicts.iter().map(|(name, _)| name.clone()).collect();
+    for entry in &entries {
+        if entry.path == toplevel || entry.path.starts_with(&toplevel) || !entry.path.exists() {
+            continue;
+        }
+        for (name, path) in state.find_within(&entry.path) {
+            if seen.insert(name.clone()) {
+                conflicts.push((name, path));
+            }
+        }
+    }
     if !conflicts.is_empty() {
         bail!(WorktreeError::ContainerConflict {
             path: toplevel.to_path_buf(),

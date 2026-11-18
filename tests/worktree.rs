@@ -544,6 +544,41 @@ fn init_refuses_a_linked_worktree() {
 }
 
 #[test]
+fn init_refuses_when_a_linked_worktree_has_a_container() {
+    let Some(sb) = Sandbox::new("linkedcontainer") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    git(&repo, &["worktree", "add", "-q", "-b", "dev", "../dev"]);
+
+    let records = sb.home().join(".config/agentdock");
+    std::fs::create_dir_all(&records).expect("create records dir");
+    std::fs::write(
+        records.join("records.json"),
+        format!(
+            r#"{{"version":1,"records":{{"dev-c":{{"path":"{}","created_at":"2026-01-01T00:00:00Z","docker_image":"img","agent_name":"agent","kvm":false}}}}}}"#,
+            sb.path("dev").display()
+        ),
+    )
+    .expect("write records");
+
+    // init relocates this worktree into the container, so a record pointing at
+    // its old path would go stale just like one inside the repository.
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    assert!(!out.status.success(), "accepted: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("dev-c"), "should name the record: {err}");
+    assert!(err.contains("dev"), "should name the path: {err}");
+
+    assert!(repo.join(".git").is_dir(), "the repository moved");
+    assert!(sb.path("dev/src/lib.rs").exists(), "the worktree moved");
+    assert!(
+        !sb.path("proj/.agentdock.json").exists(),
+        "the project was converted anyway"
+    );
+}
+
+#[test]
 fn rm_removes_a_detached_worktree_by_its_short_commit() {
     let Some(sb) = Sandbox::new("rmdetached") else {
         return;
