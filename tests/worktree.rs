@@ -514,6 +514,36 @@ fn init_refuses_when_container_records_exist_inside_the_project() {
 }
 
 #[test]
+fn init_refuses_a_linked_worktree() {
+    let Some(sb) = Sandbox::new("fromlinked") else {
+        return;
+    };
+    let repo = make_repo(&sb, "origin", "main");
+    git(&repo, &["worktree", "add", "-q", "-b", "dev", "../wt"]);
+    let worktree = sb.path("wt");
+
+    // The .git directory lives in the main worktree, so converting from here
+    // would move that repository instead of the linked checkout.
+    let out = agentdock(&worktree, &sb.home(), &["worktree", "init"]);
+    assert!(!out.status.success(), "accepted: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("linked worktree"), "{err}");
+    assert!(
+        err.contains("origin"),
+        "should name the main worktree: {err}"
+    );
+
+    assert!(repo.join(".git").is_dir(), "the main repository moved");
+    assert!(worktree.join(".git").is_file(), "the linked worktree moved");
+    assert!(repo.join("src/lib.rs").exists());
+    assert!(worktree.join("src/lib.rs").exists());
+    assert!(
+        !worktree.join(".agentdock.json").exists(),
+        "a marker was written into the linked worktree"
+    );
+}
+
+#[test]
 fn rm_removes_a_detached_worktree_by_its_short_commit() {
     let Some(sb) = Sandbox::new("rmdetached") else {
         return;

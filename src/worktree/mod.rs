@@ -144,6 +144,23 @@ pub fn init() -> Result<()> {
         });
     }
 
+    // `init` relocates the directory that holds the repository's .git. From a
+    // linked worktree that directory is the *main* worktree, so proceeding
+    // would move the main repository into this worktree and delete its old
+    // location. git lists the main worktree first.
+    let entries = git::worktree_list(&toplevel)?;
+    let main_root = entries
+        .first()
+        .map(|entry| entry.path.clone())
+        .ok_or_else(|| anyhow::anyhow!("Failed to determine the main worktree"))?;
+    let main_root = main_root.canonicalize().unwrap_or(main_root);
+    if main_root != toplevel {
+        bail!(WorktreeError::NotMainWorktree {
+            path: toplevel.to_path_buf(),
+            main: main_root,
+        });
+    }
+
     // Refuse when agentdock containers are already mounted inside this project:
     // their records point at the pre-move paths and would silently go stale.
     let state = StateManager::new()?;
@@ -170,7 +187,6 @@ pub fn init() -> Result<()> {
     }
 
     // Snapshot the existing linked worktrees before anything moves.
-    let entries = git::worktree_list(&toplevel)?;
     let linked: Vec<git::WorktreeEntry> =
         entries.into_iter().filter(|e| e.path != toplevel).collect();
 

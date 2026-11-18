@@ -34,6 +34,18 @@ Suggested actions:
     )]
     NestedProject { path: PathBuf },
 
+    #[error(
+        "'{path}' is a linked worktree, not the main one, so it cannot be converted.
+
+The repository's .git directory lives in '{main}'. Running init here would move
+that repository into this worktree instead of converting the project.
+
+Suggested actions:
+  - Run the command from the main worktree: cd {main}
+  - Then re-run agentdock worktree init"
+    )]
+    NotMainWorktree { path: PathBuf, main: PathBuf },
+
     #[error("'{path}' has no parent directory, so it cannot host worktrees.")]
     NoParentDir { path: PathBuf },
 
