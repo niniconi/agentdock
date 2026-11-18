@@ -166,6 +166,32 @@ fn init_produces_the_expected_layout() {
 }
 
 #[test]
+fn worktree_commands_without_apply_create_no_container_record() {
+    let Some(sb) = Sandbox::new("nocontainer") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    let records = sb.home().join(".config/agentdock/records.json");
+
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    assert!(out.status.success(), "init failed: {}", stderr(&out));
+    assert!(
+        !records.exists(),
+        "init created a container record: {}",
+        std::fs::read_to_string(&records).unwrap_or_default()
+    );
+
+    let main = sb.path("proj/proj-main");
+    let out = agentdock(&main, &sb.home(), &["worktree", "add", "dev"]);
+    assert!(out.status.success(), "add failed: {}", stderr(&out));
+    assert!(
+        !records.exists(),
+        "add without --apply created a container record: {}",
+        std::fs::read_to_string(&records).unwrap_or_default()
+    );
+}
+
+#[test]
 fn init_preserves_uncommitted_work() {
     let Some(sb) = Sandbox::new("dirty") else {
         return;
