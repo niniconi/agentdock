@@ -232,8 +232,9 @@ worktree gets an independent container via the usual path-based de-duplication.
 `worktree init` moves the whole repository directory rather than the files alone,
 which keeps the index, uncommitted changes and untracked files untouched. Any
 linked worktrees that already exist are moved into the container as well, and
-their `.git` pointers are repaired afterwards, since those hold absolute paths
-to their old locations.
+their `.git` pointers are repaired and rewritten relative to each worktree, so
+the project keeps working when the whole container is mounted at a different
+path (for example by one shared container).
 
 `worktree init` either converts the project completely or leaves it untouched.
 It refuses to run when the layout could not be resolved up front:

@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail};
 
 use crate::error::GitError;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 /// A single entry of `git worktree list --porcelain`.
@@ -324,7 +325,9 @@ pub fn worktree_add(
     }
 
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    git(repo, &refs).map(|_| ())
+    git(repo, &refs)?;
+    relativize_worktrees(repo)?;
+    Ok(())
 }
 
 pub fn worktree_remove(repo: &Path, path: &Path, force: bool) -> Result<()> {
@@ -354,7 +357,87 @@ pub fn worktree_repair(repo: &Path, paths: &[PathBuf]) -> Result<()> {
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     // Repair reports recoverable oddities on stderr while still succeeding, so we
     // only fail when git actually returns a non-zero status.
-    git(repo, &refs).map(|_| ())
+    git(repo, &refs)?;
+    relativize_worktrees(repo)?;
+    Ok(())
+}
+
+/// Rewrite every linked worktree's git metadata to use relative paths.
+///
+/// Git writes the worktree's `.git` pointer and the matching
+/// `.git/worktrees/<name>/gitdir` file as absolute paths by default. Those
+/// paths stop resolving when the whole container directory is mounted at a
+/// different location, which is exactly what a shared container does. Relative
+/// pointers keep working under any mount root, and they also survive moving the
+/// project by hand.
+pub fn relativize_worktrees(repo: &Path) -> Result<()> {
+    for entry in worktree_list(repo)? {
+        if entry.path == repo {
+            continue;
+        }
+        relativize_worktree(&entry.path)?;
+    }
+    Ok(())
+}
+
+fn relativize_worktree(worktree: &Path) -> Result<()> {
+    let dot_git = worktree.join(".git");
+    if !dot_git.is_file() {
+        return Ok(());
+    }
+
+    let contents = fs::read_to_string(&dot_git)
+        .with_context(|| format!("Failed to read {}", dot_git.display()))?;
+    let Some(raw) = contents.trim().strip_prefix("gitdir:") else {
+        bail!("Failed to parse {}", dot_git.display());
+    };
+    let target = PathBuf::from(raw.trim());
+    if target.is_relative() {
+        return Ok(());
+    }
+
+    let pointer = relative_path(worktree, &target);
+    fs::write(&dot_git, format!("gitdir: {}\n", pointer.display()))
+        .with_context(|| format!("Failed to rewrite {}", dot_git.display()))?;
+
+    // The reverse pointer lives beside the worktree's git directory. Git uses
+    // it for `worktree list` and prune, so leaving it absolute would keep those
+    // commands tied to the old mount root even after `.git` was fixed.
+    let reverse = target.join("gitdir");
+    if !reverse.is_file() {
+        return Ok(());
+    }
+    let reverse_contents = fs::read_to_string(&reverse)
+        .with_context(|| format!("Failed to read {}", reverse.display()))?;
+    let reverse_target = PathBuf::from(reverse_contents.trim());
+    if !reverse_target.is_absolute() {
+        return Ok(());
+    }
+
+    let reverse_pointer = relative_path(&target, &reverse_target);
+    fs::write(&reverse, format!("{}\n", reverse_pointer.display()))
+        .with_context(|| format!("Failed to rewrite {}", reverse.display()))?;
+    Ok(())
+}
+
+/// Lexical relative path from the directory `from` to `to`.
+///
+/// Both paths are absolute and belong to the same repository, so the shared
+/// prefix is all that has to be removed before prefixing the remainder with
+/// `..` components.
+fn relative_path(from: &Path, to: &Path) -> PathBuf {
+    let from: Vec<Component<'_>> = from.components().collect();
+    let to: Vec<Component<'_>> = to.components().collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+
+    let mut out = PathBuf::new();
+    for _ in common..from.len() {
+        out.push("..");
+    }
+    for component in &to[common..] {
+        out.push(component.as_os_str());
+    }
+    out
 }
 
 pub fn worktree_prune(repo: &Path) -> Result<()> {
@@ -364,6 +447,24 @@ pub fn worktree_prune(repo: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_relative_path() {
+        assert_eq!(
+            relative_path(
+                Path::new("/repo/proj-dev"),
+                Path::new("/repo/proj-main/.git/worktrees/proj-dev")
+            ),
+            PathBuf::from("../proj-main/.git/worktrees/proj-dev")
+        );
+        assert_eq!(
+            relative_path(
+                Path::new("/repo/proj-main/.git/worktrees/proj-dev"),
+                Path::new("/repo/proj-dev/.git")
+            ),
+            PathBuf::from("../../../../proj-dev/.git")
+        );
+    }
 
     #[test]
     fn test_local_relative_url_detection() {

@@ -321,6 +321,56 @@ fn init_relocates_an_existing_branch_worktree() {
 }
 
 #[test]
+fn relative_worktree_paths_survive_a_container_move() {
+    let Some(sb) = Sandbox::new("relativepaths") else {
+        return;
+    };
+    let repo = make_repo(&sb, "proj", "main");
+    // Created before init, so init has to convert its absolute pointer.
+    git(&repo, &["worktree", "add", "-q", "-b", "dev", "../dev"]);
+
+    let out = agentdock(&repo, &sb.home(), &["worktree", "init"]);
+    assert!(out.status.success(), "init failed: {}", stderr(&out));
+
+    let main = sb.path("proj/proj-main");
+    // Created after init, so add has to write a relative pointer itself.
+    let out = agentdock(&main, &sb.home(), &["worktree", "add", "feat"]);
+    assert!(out.status.success(), "add failed: {}", stderr(&out));
+
+    let dev = sb.path("proj/proj-dev");
+    let feat = sb.path("proj/proj-feat");
+    for worktree in [&dev, &feat] {
+        let pointer = std::fs::read_to_string(worktree.join(".git")).expect("read .git");
+        assert!(
+            pointer.starts_with("gitdir: ../"),
+            "pointer is not relative: {pointer}"
+        );
+    }
+
+    // A shared container mounts the whole project at a different root. Moving
+    // the project is the same path rewrite from git's point of view.
+    let moved = sb.path("workspace");
+    std::fs::rename(sb.path("proj"), &moved).expect("move container");
+    let moved_main = moved.join("proj-main");
+    let moved_dev = moved.join("proj-dev");
+    let moved_feat = moved.join("proj-feat");
+
+    assert_eq!(git(&moved_main, &["status", "--porcelain"]), "");
+    assert_eq!(git(&moved_dev, &["status", "--porcelain"]), "");
+    assert_eq!(git(&moved_feat, &["status", "--porcelain"]), "");
+
+    let listed = git(&moved_main, &["worktree", "list", "--porcelain"]);
+    assert!(
+        listed.contains(&moved_dev.display().to_string()),
+        "{listed}"
+    );
+    assert!(
+        listed.contains(&moved_feat.display().to_string()),
+        "{listed}"
+    );
+}
+
+#[test]
 fn init_rewrites_push_urls_too() {
     let Some(sb) = Sandbox::new("pushremote") else {
         return;
