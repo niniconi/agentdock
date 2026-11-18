@@ -128,6 +128,13 @@ pub fn init() -> Result<()> {
         .canonicalize()
         .context("Failed to resolve the worktree root")?;
 
+    if let Some(superproject) = git::superproject(&toplevel)? {
+        bail!(WorktreeError::InsideSubmodule {
+            path: toplevel.to_path_buf(),
+            superproject,
+        });
+    }
+
     if marker_path(&toplevel).exists() {
         bail!(WorktreeError::AlreadyConverted {
             path: toplevel.to_path_buf(),

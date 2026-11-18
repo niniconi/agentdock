@@ -686,6 +686,49 @@ fn init_refuses_when_container_records_exist_inside_the_project() {
 }
 
 #[test]
+fn init_refuses_a_submodule() {
+    let Some(sb) = Sandbox::new("submodule") else {
+        return;
+    };
+    let sub = make_repo(&sb, "sub", "main");
+    let superproject = make_repo(&sb, "super", "main");
+    git(
+        &superproject,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            sub.to_str().unwrap(),
+            "sub",
+        ],
+    );
+    git(&superproject, &["commit", "-qm", "add-submodule"]);
+
+    let checkout = superproject.join("sub");
+    let out = agentdock(&checkout, &sb.home(), &["worktree", "init"]);
+    assert!(!out.status.success(), "accepted: {}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains("submodule"), "{err}");
+    assert!(
+        err.contains(&superproject.display().to_string()),
+        "should name the superproject: {err}"
+    );
+
+    assert!(checkout.join(".git").is_file(), "the submodule moved");
+    assert!(checkout.join("src/lib.rs").exists());
+    assert!(
+        !checkout.join(".agentdock.json").exists(),
+        "a marker was written into the submodule"
+    );
+    assert!(
+        !superproject.join(".agentdock.json").exists(),
+        "the superproject was converted"
+    );
+}
+
+#[test]
 fn init_refuses_a_linked_worktree() {
     let Some(sb) = Sandbox::new("fromlinked") else {
         return;

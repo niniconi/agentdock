@@ -35,6 +35,20 @@ Suggested actions:
     NestedProject { path: PathBuf },
 
     #[error(
+        "'{path}' is a submodule of '{superproject}', so it cannot be converted on its own.
+
+Moving it would break the superproject's checkout.
+
+Suggested actions:
+  - Run the command from the superproject instead: cd {superproject}
+  - Or move this checkout out of the submodule first"
+    )]
+    InsideSubmodule {
+        path: PathBuf,
+        superproject: PathBuf,
+    },
+
+    #[error(
         "'{path}' is a linked worktree, not the main one, so it cannot be converted.
 
 The repository's .git directory lives in '{main}'. Running init here would move

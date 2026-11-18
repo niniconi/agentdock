@@ -103,6 +103,13 @@ pub fn toplevel(cwd: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// The superproject that contains this checkout, when it is a submodule.
+pub fn superproject(cwd: &Path) -> Result<Option<PathBuf>> {
+    let out = git(cwd, &["rev-parse", "--show-superproject-working-tree"])?;
+    let path = out.trim();
+    Ok((!path.is_empty()).then(|| PathBuf::from(path)))
+}
+
 /// Current branch name. Fails when HEAD is detached.
 pub fn symbolic_branch(cwd: &Path) -> Result<String> {
     match git(cwd, &["symbolic-ref", "--short", "HEAD"]) {
