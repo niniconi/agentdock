@@ -17,3 +17,10 @@ github-attestations = true
 # id-token: write has to be granted there too. Asking for it in announce left
 # the permission in one job and the step in another, and the run failed.
 github-attestations-phase = "host"
+
+# cargo-dist 0.32.0 still defaults aarch64-apple-darwin to macos-14, which
+# GitHub retired on 2026-11-02. Pin both macOS targets to currently supported
+# images instead of inheriting a default that can disappear.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
+x86_64-apple-darwin = "macos-15-intel"
